@@ -20,12 +20,12 @@ install:
   - docker pull $image
   - docker run -d --name rt -p 8080:80 -e RT_WEB_PORT=8080 $image
   - docker ps
-  - pip install coveralls codecov nose
+  - pip install -r dev_requirements.txt
   - if [[ $mode == codestyle ]]; then pip install pycodestyle; fi
 
 script:
   - python setup.py install
-  - nosetests --with-coverage
+  - pytest --cov-report term-missing --cov rt
   - if [[ $mode == codestyle ]]; then pycodestyle rt/rt.py; fi
 
 after_success:

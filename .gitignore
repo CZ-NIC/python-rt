@@ -3,3 +3,4 @@ dist
 rt.egg-info
 *.pyc
 .idea
+.coverage

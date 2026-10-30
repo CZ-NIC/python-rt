@@ -715,7 +715,7 @@ class Rt:
         transactions = self.__paged_request(
             f'ticket/{ticket_id}/history',
             params={
-                'fields': 'Type,Creator,Created,Description,_hyperlinks',
+                'fields': 'Type,Creator,Created,Description,_hyperlinks,Field',
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
             },
         )
@@ -1781,7 +1781,7 @@ class Rt:
         yield from self.__paged_request(
             f'asset/{asset_id}/history',
             params={
-                'fields': 'Type,Creator,Created,Description,_hyperlinks',
+                'fields': 'Type,Creator,Created,Description,_hyperlinks,Field',
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
             },
         )
@@ -2427,7 +2427,7 @@ class AsyncRt:
         async for transaction in self.__paged_request(
             f'ticket/{ticket_id}/history',
             params={
-                'fields': 'Type,Creator,Created,Description,_hyperlinks',
+                'fields': 'Type,Creator,Created,Description,_hyperlinks,Field',
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
             },
         ):
@@ -3484,7 +3484,7 @@ class AsyncRt:
         async for transaction in self.__paged_request(
             f'asset/{asset_id}/history',
             params={
-                'fields': 'Type,Creator,Created,Description,_hyperlinks',
+                'fields': 'Type,Creator,Created,Description,_hyperlinks,Field',
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
             },
         ):

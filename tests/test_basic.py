@@ -470,6 +470,23 @@ def test_queues(rt_connection: rt.rest2.Rt):
         rt_connection.delete_queue(f'Queue {random_string()}')
 
 
+def test_get_custom_field(rt_connection: rt.rest2.Rt):
+    field = rt_connection.get_custom_field(1)
+    assert field['id'] == 1
+
+
+def test_search_custom_fields(rt_connection: rt.rest2.Rt):
+    items = list(rt_connection.search_custom_fields())
+    for item in items:
+        assert 'id' in item
+
+
+def test_search_custom_fields_by_id(rt_connection: rt.rest2.Rt):
+    items = list(rt_connection.search_custom_fields([{'field': 'id', 'value': 1}]))
+    assert len(items) == 1
+    assert int(items[0]['id']) == 1
+
+
 def test_catalog(rt_connection: rt.rest2.Rt):
     catalog = rt_connection.get_catalog(1)
     assert catalog['id'] == 1

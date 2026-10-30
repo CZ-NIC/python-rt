@@ -487,6 +487,26 @@ async def test_queues(async_rt_connection: rt.rest2.AsyncRt):
 
 
 @pytest.mark.asyncio
+async def test_get_custom_field(async_rt_connection: rt.rest2.AsyncRt):
+    field = await async_rt_connection.get_custom_field(1)
+    assert field['id'] == 1
+
+
+@pytest.mark.asyncio
+async def test_search_custom_fields(async_rt_connection: rt.rest2.AsyncRt):
+    items = [item async for item in async_rt_connection.search_custom_fields()]
+    for item in items:
+        assert 'id' in item
+
+
+@pytest.mark.asyncio
+async def test_search_custom_fields_by_id(async_rt_connection: rt.rest2.AsyncRt):
+    items = [item async for item in async_rt_connection.search_custom_fields([{'field': 'id', 'value': 1}])]
+    assert len(items) == 1
+    assert int(items[0]['id']) == 1
+
+
+@pytest.mark.asyncio
 async def test_catalog(async_rt_connection: rt.rest2.AsyncRt):
     catalog = await async_rt_connection.get_catalog(1)
     assert catalog['id'] == 1

@@ -1615,6 +1615,62 @@ class Rt:
 
         return msg[0].lower().startswith('owner changed')
 
+    def get_custom_field(
+        self,
+        custom_field_id: str | int,
+        query_format: dict[str, typing.Any] | None = None,
+    ) -> dict[str, typing.Any]:
+        """Get a custom field, including available values for Select fields.
+
+        Example::
+
+            >>> client.get_custom_field(1)
+            >>> client.get_custom_field(1, query_format={'fields[Creator]': 'Name'})
+
+        :param custom_field_id: Custom field ID, as an integer or numeric string.
+        :param query_format: Returned fields to be populated or expanded.
+            Defaults to the server's response format.
+        :returns: Custom field details as a dictionary.
+        :raises NotFoundError: If the custom field does not exist.
+        :raises UnexpectedResponseError: If the response is not a dictionary.
+        """
+        get_params = dict(query_format or {})
+        response = self.__request(f'customfield/{custom_field_id}', get_params=get_params)
+
+        self.logger.debug(str(response))
+
+        if not isinstance(response, dict):
+            raise UnexpectedResponseError(str(response))
+
+        return response
+
+    def search_custom_fields(
+        self,
+        search_params: list[dict[str, typing.Any]] | None = None,
+        query_format: dict[str, typing.Any] | None = None,
+    ) -> typing.Iterator[dict[str, typing.Any]]:
+        """Search custom fields, or list all accessible fields when no filters are supplied.
+
+        Example::
+
+            >>> list(client.search_custom_fields())
+            >>> list(client.search_custom_fields(
+            ...     [{'field': 'Name', 'operator': 'LIKE', 'value': 'Department%'}],
+            ...     query_format={'fields': 'Name,Type,Description'},
+            ... ))
+
+        :param search_params: Structured JSON search filters with field, value, and
+            optional operator keys. Omitted or empty filters search for ``id > 0``.
+        :param query_format: Returned fields to be populated or expanded.
+            Defaults to the server's response format; pagination is managed automatically.
+        :returns: Iterator of custom field dictionaries across all result pages.
+        """
+        if not search_params:
+            search_params = [{'field': 'id', 'operator': '>', 'value': 0}]
+
+        get_params = dict(query_format or {})
+        yield from self.__paged_request('customfields', json_data=search_params, params=get_params)
+
     def get_catalog(self, catalog_id: str | int) -> dict[str, typing.Any]:
         """
         Get catalog.
@@ -3316,6 +3372,63 @@ class AsyncRt:
         self.logger.debug(str(msg))
 
         return msg[0].lower().startswith('owner changed')
+
+    async def get_custom_field(
+        self,
+        custom_field_id: str | int,
+        query_format: dict[str, typing.Any] | None = None,
+    ) -> dict[str, typing.Any]:
+        """Get a custom field, including available values for Select fields.
+
+        Example::
+
+            >>> await client.get_custom_field(1)
+            >>> await client.get_custom_field(1, query_format={'fields[Creator]': 'Name'})
+
+        :param custom_field_id: Custom field ID, as an integer or numeric string.
+        :param query_format: Returned fields to be populated or expanded.
+            Defaults to the server's response format.
+        :returns: Custom field details as a dictionary.
+        :raises NotFoundError: If the custom field does not exist.
+        :raises UnexpectedResponseError: If the response is not a dictionary.
+        """
+        get_params = dict(query_format or {})
+        response = await self.__request(f'customfield/{custom_field_id}', get_params=get_params)
+
+        self.logger.debug(str(response))
+
+        if not isinstance(response, dict):
+            raise UnexpectedResponseError(str(response))
+
+        return response
+
+    async def search_custom_fields(
+        self,
+        search_params: list[dict[str, typing.Any]] | None = None,
+        query_format: dict[str, typing.Any] | None = None,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search custom fields, or list all accessible fields when no filters are supplied.
+
+        Example::
+
+            >>> [field async for field in client.search_custom_fields()]
+            >>> [field async for field in client.search_custom_fields(
+            ...     [{'field': 'Name', 'operator': 'LIKE', 'value': 'Department%'}],
+            ...     query_format={'fields': 'Name,Type,Description'},
+            ... )]
+
+        :param search_params: Structured JSON search filters with field, value, and
+            optional operator keys. Omitted or empty filters search for ``id > 0``.
+        :param query_format: Returned fields to be populated or expanded.
+            Defaults to the server's response format; pagination is managed automatically.
+        :returns: Async iterator of custom field dictionaries across all result pages.
+        """
+        if not search_params:
+            search_params = [{'field': 'id', 'operator': '>', 'value': 0}]
+
+        get_params = dict(query_format or {})
+        async for item in self.__paged_request('customfields', json_data=search_params, params=get_params):
+            yield item
 
     async def get_catalog(self, catalog_id: str | int) -> dict[str, typing.Any]:
         """

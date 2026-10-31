@@ -1,4 +1,7 @@
-"""Tests for python-rt / REST2 - Python interface to Request Tracker :term:`API`."""
+"""Tests for python-rt / REST2 - Python interface to Request Tracker :term:`API`.
+
+The sync tests (test_tickets.py) are generated from the async tests (test_tickets_async.py) using unasyncd.
+"""
 
 # ruff: noqa: S101
 
@@ -26,16 +29,14 @@ __authors__ = [
 
 import base64
 
-import pytest
-
-import rt.rest2
+from rt.common import Attachment
+from rt.rest2_async import AsyncRt
 
 from . import random_string
 from .conftest import RT_QUEUE
 
 
-@pytest.mark.asyncio
-async def test_ticket_attachments(async_rt_connection: rt.rest2.AsyncRt):
+async def test_ticket_attachments(async_rt_connection: AsyncRt):
     """Test various ticket attachment operations."""
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = (
@@ -44,7 +45,7 @@ async def test_ticket_attachments(async_rt_connection: rt.rest2.AsyncRt):
     attachment_content = b'Content of attachment.'
     attachment_name = 'attachment-name.txt'
 
-    attachment = rt.rest2.Attachment(attachment_name, 'text/plain', attachment_content)
+    attachment = Attachment(attachment_name, 'text/plain', attachment_content)
     ticket_id = await async_rt_connection.create_ticket(
         subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment]
     )
@@ -80,8 +81,7 @@ async def test_ticket_attachments(async_rt_connection: rt.rest2.AsyncRt):
     assert not att_ids
 
 
-@pytest.mark.asyncio
-async def test_ticket_take(async_rt_connection: rt.rest2.AsyncRt):
+async def test_ticket_take(async_rt_connection: AsyncRt):
     """Test take/untake."""
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = (

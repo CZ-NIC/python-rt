@@ -33,6 +33,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: unasyncd
+        name: unasyncd (generate the sync code and tests from the async ones)
+        entry: uv run unasyncd
+        files: ^(rt/rest2(_async)?|tests/test_(basic|tickets|rest2_fixes)(_async)?)\.py$
+        pass_filenames: false
+        require_serial: true
+        language: system
+
       - id: local-ruff-check
         name: ruff check
         entry: uv run ruff check --force-exclude --fix --exit-non-zero-on-fix

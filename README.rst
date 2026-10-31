@@ -34,14 +34,15 @@ Python implementation of REST API described here:
     As of version 3.1.0, this library is async compatible.
     Usage::
 
-      import rt.rest2
+      import rt.rest2_async
       import httpx2
 
-      tracker = rt.rest2.AsyncRt('http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password'))
+      async with rt.rest2_async.AsyncRt(url='http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password')) as tracker:
+          ticket = await tracker.get_ticket(1)
 
 ⚠️ **Warning**:
-    Though version 3.x still supports RT REST API version 1, it contains minor breaking changes. Please see the changelog
-    in the documentation for details.
+    The next release contains breaking changes for both the REST API version 1 and version 2 parts. Please see the
+    migration guide in the changelog (CHANGELOG.md) for details.
 
 Documentation
 =============
@@ -70,8 +71,8 @@ An example is worth a thousand words::
 
     >>> import rt.rest2
     >>> import httpx2
-    >>> tracker = rt.rest2.Rt('http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password'))
-    >>> map(lambda x: x['id'], tracker.search(Queue='helpdesk', Status='open'))
+    >>> tracker = rt.rest2.Rt(url='http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password'))
+    >>> [ticket['id'] for ticket in tracker.search(queue='helpdesk', Status='open')]
     ['1', '2', '10', '15']
     >>> tracker.create_ticket(queue='helpdesk', \
     ... subject='Coffee (important)', content='Help I Ran Out of Coffee!')
@@ -87,12 +88,12 @@ Get the last important updates from a specific queue that have been updated rece
     >>> import base64
     >>> import rt.rest2
     >>> import httpx2
-    >>> tracker = rt.rest2.Rt('http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password'))
-    >>> fifteen_minutes_ago = str(datetime.datetime.now() - datetime.timedelta(minutes=15))
-    >>> tickets = tracker.last_updated(since=fifteen_minutes_ago)
+    >>> tracker = rt.rest2.Rt(url='http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password'))
+    >>> fifteen_minutes_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
+    >>> tickets = tracker.last_updated(since=fifteen_minutes_ago, queue='helpdesk')
     >>> for ticket in tickets:
     >>>     id = ticket['id']
-    >>>     history = tracker.get_ticket_history(id)
+    >>>     history = list(tracker.get_ticket_history(id))
     >>>     last_update = list(reversed([h for h in history if h['Type'] in ('Correspond', 'Comment')]))
     >>>     hid = tracker.get_transaction(last_update[0]['id'] if last_update else history[0]['id'])
     >>>

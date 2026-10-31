@@ -22,15 +22,16 @@ Provided functionality:
 * untake tickets
 """
 
-import datetime
+import collections.abc
+import datetime as dt
 import logging
 import re
+import ssl
 import typing
 import warnings
 from urllib.parse import urljoin
 
-import requests
-import requests.auth
+import httpx2
 
 from .exceptions import (
     APISyntaxError,
@@ -40,6 +41,7 @@ from .exceptions import (
     InvalidUseError,
     NotAllowedError,
     NotFoundError,
+    RtConnectionError,
     UnexpectedMessageFormatError,
     UnexpectedResponseError,
 )
@@ -72,6 +74,9 @@ DEFAULT_QUEUE = 'General'
 """ Default queue used. """
 
 ALL_QUEUES = object()
+
+# A file to attach: (filename, content) or (filename, content, content type)
+FileTuple: typing.TypeAlias = tuple[str, typing.IO[bytes] | bytes] | tuple[str, typing.IO[bytes] | bytes, str | None]
 
 
 class Rt:
@@ -110,19 +115,32 @@ class Rt:
         'does_not_exist_pattern_bytes': re.compile(rb'^# (?:Queue|User|Ticket) \w* does not exist\.$'),
         'not_related_pattern': re.compile(r'^# Transaction \d+ is not related to Ticket \d+'),
         'invalid_attachment_pattern_bytes': re.compile(rb'^# Invalid attachment id: \d+$'),
-    }  # type: typing.Dict[str, re.Pattern]
+    }  # type: typing.ClassVar[dict[str, re.Pattern[str] | re.Pattern[bytes]]]
+
+    @classmethod
+    def __pattern(cls, name: str) -> re.Pattern[str]:
+        """Return the regular expression with the given name from RE_PATTERNS for matching text."""
+        # the patterns for matching bytes are named with suffix "_bytes", all others match text
+        return typing.cast('re.Pattern[str]', cls.RE_PATTERNS[name])
+
+    @classmethod
+    def __bytes_pattern(cls, name: str) -> re.Pattern[bytes]:
+        """Return the regular expression with the given name from RE_PATTERNS for matching bytes."""
+        return typing.cast('re.Pattern[bytes]', cls.RE_PATTERNS[name])
 
     def __init__(
         self,
+        *,
         url: str,
         default_login: str | None = None,
         default_password: str | None = None,
-        cookies: dict | None = None,
+        cookies: dict[str, str] | None = None,
         proxy: str | None = None,
         default_queue: str = DEFAULT_QUEUE,
         skip_login: bool = False,
-        verify_cert: str | bool | None = True,
-        http_auth: requests.auth.AuthBase | None = None,
+        verify_cert: str | bool = True,
+        http_auth: httpx2.Auth | None = None,
+        http_timeout: int | None = 20,
     ) -> None:
         """API initialization.
 
@@ -133,12 +151,13 @@ class Rt:
         :keyword default_password: Default RT password
         :keyword proxy: Proxy server (string with http://user:password@host/ syntax)
         :keyword default_queue: Default RT queue
-        :keyword skip_login: Set this option True when HTTP Basic authentication
-                             credentials for RT are in .netrc file. You do not
-                             need to call login, because it is managed by
-                             requests library instantly.
-        :keyword http_auth: Specify a http authentication instance, e.g. HTTPBasicAuth(), HTTPDigestAuth(),
+        :keyword skip_login: Set this option True when authentication is handled
+                             externally and you do not need to call login.
+        :keyword verify_cert: Verify the server certificate (``True``/``False``) or path
+                              to a CA bundle file to verify against.
+        :keyword http_auth: Specify a http authentication instance, e.g. httpx2.BasicAuth(), httpx2.DigestAuth(),
                             etc. to be used for authenticating to RT
+        :keyword http_timeout: HTTP timeout after which a request is aborted.
         """
         self.logger = logging.getLogger(__name__)
 
@@ -150,35 +169,65 @@ class Rt:
         self.default_password = default_password
         self.default_queue = default_queue
         self.login_result = None
-        self.session = requests.session()
+
+        if isinstance(verify_cert, bool):
+            ssl_verify: ssl.SSLContext | bool = verify_cert
+        elif isinstance(verify_cert, str):
+            ssl_verify = ssl.create_default_context(cafile=verify_cert)
+        else:
+            ssl_verify = True
+
+        self.session = httpx2.Client(
+            timeout=http_timeout,
+            verify=ssl_verify,
+            proxy=proxy,
+            auth=http_auth,
+            cookies=cookies,
+            headers={'referer': url} if cookies else None,
+        )
         if cookies:
-            self.session.headers.update({'referer': url})
-            self.session.cookies.update(cookies)
             self.login_result = True
 
-        self.session.verify = verify_cert
-        if proxy is not None:
-            if url.lower().startswith('https://'):
-                self.session.proxies = {'https': proxy}
-            else:
-                self.session.proxies = {'http': proxy}
-        if http_auth:
-            self.session.auth = http_auth
         if skip_login or http_auth:
             # Assume valid credentials, because we do not need to call login()
             # explicitly with basic or digest authentication (or if this is
             # assured, that we are login in instantly)
             self.login_result = True
 
+    @typing.overload
     def __request(
         self,
         selector: str,
-        get_params: dict[str, typing.Any] | None = None,
-        post_data: dict[str, typing.Any] | None = None,
-        files: list[tuple[str, typing.IO, str | None]] | None = None,
+        *,
+        get_params: collections.abc.Mapping[str, str] | None = None,
+        post_data: collections.abc.Mapping[str, str | int] | None = None,
+        files: list[FileTuple] | None = None,
+        without_login: bool = False,
+        text_response: typing.Literal[True] = True,
+    ) -> str: ...
+
+    @typing.overload
+    def __request(
+        self,
+        selector: str,
+        *,
+        get_params: collections.abc.Mapping[str, str] | None = None,
+        post_data: collections.abc.Mapping[str, str | int] | None = None,
+        files: list[FileTuple] | None = None,
+        without_login: bool = False,
+        text_response: typing.Literal[False],
+    ) -> bytes: ...
+
+    def __request(
+        self,
+        selector: str,
+        *,
+        get_params: collections.abc.Mapping[str, str] | None = None,
+        post_data: collections.abc.Mapping[str, str | int] | None = None,
+        files: list[FileTuple] | None = None,
         without_login: bool = False,
         text_response: bool = True,
-    ) -> str:
+    ) -> str | bytes:
         r"""General request for :term:`API`.
 
         :keyword selector: End part of URL which completes self.url parameter
@@ -197,7 +246,7 @@ class Rt:
         :rtype: string or bytes if text_response is False
         :raises AuthorizationError: In case that request is called without previous
                                     login or login attempt failed.
-        :raises ConnectionError: In case of connection error.
+        :raises RtConnectionError: In case of connection error.
         """
         try:
             if (not self.login_result) and (not without_login):
@@ -212,42 +261,41 @@ class Rt:
                 files_data = {}
                 for i, file_pair in enumerate(files):
                     files_data[f'attachment_{i + 1}'] = file_pair
-                response = self.session.post(url, data=post_data, files=files_data)  # type: ignore
+                response = self.session.post(url, data=post_data, files=files_data)
 
-            method = 'GET'
-            if post_data or files:
-                method = 'POST'
-            self.logger.debug('### %s', datetime.datetime.now(tz=datetime.timezone.utc).isoformat())
-            self.logger.debug('Request URL: %s', url)
-            self.logger.debug('Request method: %s', method)
-            self.logger.debug('Response status code: %s', str(response.status_code))
-            self.logger.debug('Response content:')
-            self.logger.debug(response.content.decode(errors='ignore'))
+            self.__debug_response(response)
 
             if response.status_code == 401:
                 raise AuthorizationError('Server could not verify that you are authorized to access the requested document.')
             if response.status_code != 200:
-                raise UnexpectedResponseError(f'Received status code {response.status_code} instead of 200.')
-            try:
-                if response.encoding:
-                    result = response.content.decode(response.encoding.lower())
-                else:
-                    # try utf-8 if encoding is not filled
-                    result = response.content.decode('utf-8')
-            except LookupError as exc:
-                raise UnexpectedResponseError(f'Unknown response encoding: {response.encoding}.') from exc
-            except UnicodeError as exc:
-                if text_response:
-                    raise UnexpectedResponseError('Unknown response encoding (UTF-8 does not work).') from exc
+                raise UnexpectedResponseError(
+                    f'Received status code {response.status_code} instead of 200.',
+                    status_code=response.status_code,
+                    response_message=response.text,
+                )
 
-                # replace errors - we need decoded content just to check for error codes in __check_response
-                result = response.content.decode('utf-8', 'replace')
+            # decoded using the charset sent by the server (UTF-8 if none), undecodable bytes are replaced
+            result = response.text
             self.__check_response(result)
             if not text_response:
-                return response.content  # type: ignore
+                return response.content
             return result
-        except requests.exceptions.ConnectionError as exc:
-            raise ConnectionError('Connection error', exc) from exc
+        except httpx2.ConnectError as exc:
+            raise RtConnectionError('Connection error', exc) from exc
+        except httpx2.TransportError as exc:
+            raise RtConnectionError('Transport error', exc) from exc
+
+    def __debug_response(self, response: httpx2.Response) -> None:
+        """Output debug information for a given HTTP response.
+
+        The request body is not logged as it may contain credentials (login).
+        """
+        self.logger.debug('### %s', dt.datetime.now(tz=dt.timezone.utc).isoformat())
+        self.logger.debug('Request URL: %s', response.request.url)
+        self.logger.debug('Request method: %s', response.request.method)
+        self.logger.debug('Response status code: %s', str(response.status_code))
+        self.logger.debug('Response content:')
+        self.logger.debug(response.content.decode(errors='ignore'))
 
     @staticmethod
     def __get_status_code(msg: str) -> int | None:
@@ -262,7 +310,7 @@ class Rt:
         except (ValueError, AttributeError, LookupError):
             return None
 
-    def __check_response(self, msg: str | list) -> None:
+    def __check_response(self, msg: str | list[str]) -> None:
         """Search general errors in server response and raise exceptions when found.
 
         :keyword msg: Result message
@@ -273,13 +321,13 @@ class Rt:
         """
         if not isinstance(msg, list):
             msg = msg.split('\n')
-        if (len(msg) > 2) and self.RE_PATTERNS['not_allowed_pattern'].match(msg[2]):
+        if (len(msg) > 2) and self.__pattern('not_allowed_pattern').match(msg[2]):
             raise NotAllowedError(msg[2][2:])
-        if self.RE_PATTERNS['credentials_required_pattern'].match(msg[0]):
+        if self.__pattern('credentials_required_pattern').match(msg[0]):
             raise AuthorizationError('Credentials required.')
-        if self.RE_PATTERNS['syntax_error_pattern'].match(msg[0]):
+        if self.__pattern('syntax_error_pattern').match(msg[0]):
             raise APISyntaxError(msg[2][2:] if len(msg) > 2 else 'Syntax error.')
-        if self.RE_PATTERNS['bad_request_pattern'].match(msg[0]):
+        if self.__pattern('bad_request_pattern').match(msg[0]):
             raise BadRequestError(msg[2] if len(msg) > 2 else 'Bad request.')
 
     @staticmethod
@@ -320,7 +368,7 @@ class Rt:
         fields = {}  # type: typing.Dict[str, typing.List[str]]
         key = '<no key>'
         for line in msg:
-            if not line or line.startswith('#') or (not fields and cls.RE_PATTERNS['status_pattern'].match(line)):
+            if not line or line.startswith('#') or (not fields and cls.__pattern('status_pattern').match(line)):
                 key = '<no key>'
             elif line[0].isspace():
                 try:
@@ -400,7 +448,7 @@ class Rt:
             Calling this method is not necessary when HTTP basic or HTTP
             digest_auth authentication is used and RT accepts it as external
             authentication method, because the login in this case is done
-            transparently by requests module. Anyway this method can be useful
+            transparently with every request. Anyway this method can be useful
             to check whether given credentials are valid or not.
 
         :keyword login: Username used for RT, if not supplied together with
@@ -447,7 +495,7 @@ class Rt:
             self.login_result = None
         return ret
 
-    def new_correspondence(self, queue: str | object | None = None) -> list[dict]:
+    def new_correspondence(self, queue: str | object | None = None) -> list[dict[str, str | typing.Sequence[str]]]:
         """Obtains tickets changed by other users than the system one.
 
         :keyword queue: Queue where to search
@@ -459,7 +507,7 @@ class Rt:
         """
         return self.search(Queue=queue, order='-LastUpdated', LastUpdatedBy__notexact=self.default_login)
 
-    def last_updated(self, since: str, queue: str | object | None = None) -> list[dict]:
+    def last_updated(self, since: str, queue: str | object | None = None) -> list[dict[str, str | typing.Sequence[str]]]:
         """Obtains tickets changed after given date.
 
         :param since: Date as string in form '2011-02-24'
@@ -479,13 +527,13 @@ class Rt:
         raw_query: str | None = None,
         Format: str = 'l',
         Fields: list[str] | None = None,
-        **kwargs: typing.Any,
-    ) -> list[dict]:
+        **kwargs: object,
+    ) -> list[dict[str, str | typing.Sequence[str]]]:
         r"""Search arbitrary needles in given fields and queue.
 
         Example::
 
-            >>> tracker = Rt('http://tracker.example.com/REST/1.0/', 'rt-username', 'top-secret')
+            >>> tracker = Rt(url='http://tracker.example.com/REST/1.0/', default_login='rt-username', default_password='top-secret')
             >>> tracker.login()
             >>> tickets = tracker.search(CF_Domain='example.com', Subject__like='warning')
             >>> tickets = tracker.search(Queue='General', order='Status', raw_query="id='1'+OR+id='2'+OR+id='3'")
@@ -589,7 +637,7 @@ class Rt:
                 {'id': 'ticket/' + key, 'numerical_id': key, 'Subject': value} for key, value in self.__parse_response_dict(msg).items()
             ]
         if Format == 'i':
-            items = []
+            items: list[dict[str, str | typing.Sequence[str]]] = []
             msgs = lines[2:]
             for msg in msgs:
                 if msg == '':  # Ignore blank line at the end
@@ -600,7 +648,7 @@ class Rt:
 
         return []
 
-    def get_ticket(self, ticket_id: str | int) -> dict | None:
+    def get_ticket(self, ticket_id: str | int) -> dict[str, str | typing.Sequence[str]] | None:
         """Fetch ticket by its ID.
 
         :param ticket_id: ID of demanded ticket
@@ -637,7 +685,7 @@ class Rt:
         if status_code is not None and status_code == 200:
             msg = _msg.split('\n')
             try:
-                not_found = self.RE_PATTERNS['does_not_exist_pattern'].match(msg[2])
+                not_found = self.__pattern('does_not_exist_pattern').match(msg[2])
             except IndexError:
                 not_found = None
 
@@ -649,7 +697,7 @@ class Rt:
         raise UnexpectedMessageFormatError(f'Received status code is {status_code} instead of 200.')
 
     @staticmethod
-    def __ticket_post_data(data_source: dict) -> str:
+    def __ticket_post_data(data_source: dict[str, str | list[str] | tuple[str, ...]]) -> str:
         """Convert a dictionary of RT ticket data into a REST POST data string.
 
         :param data_source: Dictionary with ticket fields and values.
@@ -672,9 +720,9 @@ class Rt:
 
     def create_ticket(
         self,
-        Queue: str | object | None = None,
-        files: list[tuple[str, typing.IO, str | None]] | None = None,
-        **kwargs: typing.Any,
+        Queue: str | None = None,
+        files: list[FileTuple] | None = None,
+        **kwargs: str | list[str] | tuple[str, ...],
     ) -> int:
         """Create new ticket and set given parameters.
 
@@ -726,13 +774,13 @@ class Rt:
 
         msg = self.__request('ticket/new', post_data={'content': post_data}, files=files)
         for line in msg.split('\n')[2:-1]:
-            res = self.RE_PATTERNS['ticket_created_pattern'].match(line)
+            res = self.__pattern('ticket_created_pattern').match(line)
             if res is not None:
                 return int(res.group(1))
             warnings.warn(line[2:], stacklevel=2)
         return -1
 
-    def edit_ticket(self, ticket_id: str | int, **kwargs: typing.Any) -> bool:
+    def edit_ticket(self, ticket_id: str | int, **kwargs: str | list[str] | tuple[str, ...]) -> bool:
         """Edit ticket values.
 
         :param ticket_id: ID of ticket to edit
@@ -756,9 +804,11 @@ class Rt:
         if '' == msg:  # Ticket not modified
             return True
         state = msg.split('\n')[2]
-        return self.RE_PATTERNS['update_pattern'].match(state) is not None
+        return self.__pattern('update_pattern').match(state) is not None
 
-    def get_history(self, ticket_id: str | int, transaction_id: str | int | None = None) -> list[dict] | None:
+    def get_history(
+        self, ticket_id: str | int, transaction_id: str | int | None = None
+    ) -> list[dict[str, str | list[tuple[int, str]]]] | None:
         """Get set of history items.
 
         :param ticket_id: ID of ticket
@@ -786,7 +836,7 @@ class Rt:
             msgs = self.__request(f'ticket/{ticket_id}/history/id/{transaction_id}')
         lines = msgs.split('\n')
         if (len(lines) > 2) and (
-            self.RE_PATTERNS['does_not_exist_pattern'].match(lines[2]) or self.RE_PATTERNS['not_related_pattern'].match(lines[2])
+            self.__pattern('does_not_exist_pattern').match(lines[2]) or self.__pattern('not_related_pattern').match(lines[2])
         ):
             return None
         items = typing.cast(
@@ -809,7 +859,7 @@ class Rt:
         msg = self.__request(f'ticket/{ticket_id}/history')
         lines = msg.split('\n')
         if self.__get_status_code(lines[0]) == 200:
-            if (len(lines) > 2) and self.RE_PATTERNS['does_not_exist_pattern'].match(lines[2]):
+            if (len(lines) > 2) and self.__pattern('does_not_exist_pattern').match(lines[2]):
                 return None
             return self.__parse_response_numlist(lines)
         return []
@@ -818,11 +868,12 @@ class Rt:
         self,
         ticket_id: str | int,
         text: str = '',
+        *,
         action: str = 'correspond',
         cc: str = '',
         bcc: str = '',
         content_type: str = 'text/plain',
-        files: list[tuple[str, typing.IO, str | None]] | None = None,
+        files: list[FileTuple] | None = None,
     ) -> bool:
         """Sends out the correspondence.
 
@@ -859,10 +910,11 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         self,
         ticket_id: str | int,
         text: str = '',
+        *,
         cc: str = '',
         bcc: str = '',
         content_type: str = 'text/plain',
-        files: list[tuple[str, typing.IO, str | None]] | None = None,
+        files: list[FileTuple] | None = None,
     ) -> bool:
         """Sends email message to the contacts in ``Requestors`` field of
         given ticket with subject as is set in ``Subject`` field.
@@ -891,16 +943,17 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
                       Sending failed (status code != 200)
         :raises BadRequestError: When ticket does not exist
         """
-        return self.__correspond(ticket_id, text, 'correspond', cc, bcc, content_type, files)
+        return self.__correspond(ticket_id, text, action='correspond', cc=cc, bcc=bcc, content_type=content_type, files=files)
 
     def comment(
         self,
         ticket_id: str | int,
         text: str = '',
+        *,
         cc: str = '',
         bcc: str = '',
         content_type: str = 'text/plain',
-        files: list[tuple[str, typing.IO, str | None]] | None = None,
+        files: list[FileTuple] | None = None,
     ) -> bool:
         """Adds comment to the given ticket.
 
@@ -914,7 +967,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
 
         Example::
 
-            >>> tracker = Rt('http://tracker.example.com/REST/1.0/', 'rt-username', 'top-secret')
+            >>> tracker = Rt(url='http://tracker.example.com/REST/1.0/', default_login='rt-username', default_password='top-secret')
             >>> attachment_name = sys.argv[1]
             >>> message_text = ' '.join(sys.argv[2:])
             >>> ret = tracker.comment(ticket_id, text=message_text,
@@ -934,7 +987,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
                       Sending failed (status code != 200)
         :raises BadRequestError: When ticket does not exist
         """
-        return self.__correspond(ticket_id, text, 'comment', cc, bcc, content_type, files)
+        return self.__correspond(ticket_id, text, action='comment', cc=cc, bcc=bcc, content_type=content_type, files=files)
 
     def get_attachments(self, ticket_id: str | int) -> list[tuple[str, str, str, str]] | None:
         """Get attachment list for a given ticket.
@@ -946,7 +999,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         """
         msg = self.__request(f'ticket/{ticket_id}/attachments')
         lines = msg.split('\n')
-        if (len(lines) > 2) and self.RE_PATTERNS['does_not_exist_pattern'].match(lines[2]):
+        if (len(lines) > 2) and self.__pattern('does_not_exist_pattern').match(lines[2]):
             return None
         attachment_infos = []
         if (self.__get_status_code(lines[0]) == 200) and (len(lines) >= 4):
@@ -957,10 +1010,11 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
             # single attachment tickets.
             # -> Bug in RT
             for line in lines[3:]:
-                info = self.RE_PATTERNS['attachments_list_pattern'].match(line)
+                info = self.__pattern('attachments_list_pattern').match(line)
                 if info:
-                    attachment_infos.append(info.groups())
-        return attachment_infos  # type: ignore # type returned by the regex, if it matches, is as defined above
+                    # the pattern has exactly four groups, which all participate in a match
+                    attachment_infos.append(typing.cast('tuple[str, str, str, str]', info.groups()))
+        return attachment_infos
 
     def get_attachments_ids(self, ticket_id: str | int) -> list[int] | None:
         """Get IDs of attachments for given ticket.
@@ -972,7 +1026,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         attachments = self.get_attachments(ticket_id)
         return [int(at[0]) for at in attachments] if attachments is not None else None
 
-    def get_attachment(self, ticket_id: str | int, attachment_id: str | int) -> dict | None:
+    def get_attachment(self, ticket_id: str | int, attachment_id: str | int) -> dict[str, str | dict[str, str] | bytes] | None:
         """Get attachment.
 
         :param ticket_id: ID of ticket
@@ -1027,15 +1081,14 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
                   Returns None if ticket or attachment does not exist.
         :raises UnexpectedMessageFormatError: Unexpected format of returned message.
         """
-        _msg = self.__request(f'ticket/{ticket_id}/attachments/{attachment_id}', text_response=False)
-        msg = typing.cast('bytes', _msg).split(b'\n')
+        msg = self.__request(f'ticket/{ticket_id}/attachments/{attachment_id}', text_response=False).split(b'\n')
         if (len(msg) > 2) and (
-            self.RE_PATTERNS['invalid_attachment_pattern_bytes'].match(msg[2])
-            or self.RE_PATTERNS['does_not_exist_pattern_bytes'].match(msg[2])
+            self.__bytes_pattern('invalid_attachment_pattern_bytes').match(msg[2])
+            or self.__bytes_pattern('does_not_exist_pattern_bytes').match(msg[2])
         ):
             return None
         msg = msg[2:]
-        head_matching = [i for i, m in enumerate(msg) if self.RE_PATTERNS['headers_pattern_bytes'].match(m)]
+        head_matching = [i for i, m in enumerate(msg) if self.__bytes_pattern('headers_pattern_bytes').match(m)]
         head_id = head_matching[0] if head_matching else None
         if not head_id:
             raise UnexpectedMessageFormatError(
@@ -1043,14 +1096,14 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
                                            Missing line starting with `Headers:`.'
             )
         msg[head_id] = re.sub(b'^Headers: (.*)$', rb'\1', msg[head_id])
-        cont_matching = [i for i, m in enumerate(msg) if self.RE_PATTERNS['content_pattern_bytes'].match(m)]
+        cont_matching = [i for i, m in enumerate(msg) if self.__bytes_pattern('content_pattern_bytes').match(m)]
         if not cont_matching:
             raise UnexpectedMessageFormatError(
                 'Unexpected content part of attachment entry. \
                                            Missing line starting with `Content:`.'
             )
         cont_id = cont_matching[0]
-        pairs: dict[str, typing.Any] = {}
+        pairs: dict[str, str | dict[str, str] | bytes] = {}
         for i in range(head_id):
             if b': ' in msg[i]:
                 header, content = msg[i].split(b': ', 1)
@@ -1085,11 +1138,11 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         Returns: Bytes with content of attachment or None if ticket or
                  attachment does not exist.
         """
-        msg = typing.cast('bytes', self.__request(f'ticket/{ticket_id}/attachments/{attachment_id}/content', text_response=False))
+        msg = self.__request(f'ticket/{ticket_id}/attachments/{attachment_id}/content', text_response=False)
         lines = msg.split(b'\n', 3)
         if (len(lines) == 4) and (
-            self.RE_PATTERNS['invalid_attachment_pattern_bytes'].match(lines[2])
-            or self.RE_PATTERNS['does_not_exist_pattern_bytes'].match(lines[2])
+            self.__bytes_pattern('invalid_attachment_pattern_bytes').match(lines[2])
+            or self.__bytes_pattern('does_not_exist_pattern_bytes').match(lines[2])
         ):
             return None
         return msg[msg.find(b'\n') + 2 :]
@@ -1129,13 +1182,13 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         lines = msg.split('\n')
         status_code = self.__get_status_code(lines[0])
         if status_code is not None and status_code == 200:
-            if (len(lines) > 2) and self.RE_PATTERNS['does_not_exist_pattern'].match(lines[2]):
+            if (len(lines) > 2) and self.__pattern('does_not_exist_pattern').match(lines[2]):
                 return None
             return self.__parse_response_dict(lines)
 
         raise UnexpectedMessageFormatError(f'Received status code is {status_code} instead of 200.')
 
-    def create_user(self, Name: str, EmailAddress: str, **kwargs: typing.Any) -> int | bool:
+    def create_user(self, Name: str, EmailAddress: str, **kwargs: object) -> int | bool:
         """Create user (undocumented API feature).
 
         :param Name: User name (login for privileged, required)
@@ -1147,7 +1200,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         """
         return self.edit_user('new', Name=Name, EmailAddress=EmailAddress, **kwargs)
 
-    def edit_user(self, user_id: str | int, **kwargs: typing.Any) -> int | bool:
+    def edit_user(self, user_id: str | int, **kwargs: object) -> int | bool:
         """Edit user profile (undocumented API feature).
 
         :param user_id: Identification of user by username (str) or user ID
@@ -1239,7 +1292,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         msg = self.__request('edit', post_data={'content': post_data})
         msgs = msg.split('\n')
         if (self.__get_status_code(msg) == 200) and (len(msgs) > 2):
-            match = self.RE_PATTERNS['user_pattern'].match(msgs[2])
+            match = self.__pattern('user_pattern').match(msgs[2])
             if match:
                 return int(match.group(1))
         return False
@@ -1267,13 +1320,13 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         lines = msg.split('\n')
         status_code = self.__get_status_code(lines[0])
         if status_code is not None and status_code == 200:
-            if (len(lines) > 2) and self.RE_PATTERNS['does_not_exist_pattern'].match(lines[2]):
+            if (len(lines) > 2) and self.__pattern('does_not_exist_pattern').match(lines[2]):
                 return None
             return self.__parse_response_dict(lines)
 
         raise UnexpectedMessageFormatError(f'Received status code is {status_code} instead of 200.')
 
-    def edit_queue(self, queue_id: str | int, **kwargs: typing.Any) -> str | bool:
+    def edit_queue(self, queue_id: str | int, **kwargs: object) -> str | bool:
         """Edit queue (undocumented API feature).
 
         :param queue_id: Identification of queue by name (str) or ID (int)
@@ -1303,12 +1356,12 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         msg = self.__request('edit', post_data={'content': post_data})
         msgs = msg.split('\n')
         if (self.__get_status_code(msg) == 200) and (len(msgs) > 2):
-            match = self.RE_PATTERNS['queue_pattern'].match(msgs[2])
+            match = self.__pattern('queue_pattern').match(msgs[2])
             if match:
                 return match.group(1)
         return False
 
-    def create_queue(self, Name: str, **kwargs: typing.Any) -> int:
+    def create_queue(self, Name: str, **kwargs: object) -> int:
         """Create queue (undocumented API feature).
 
         :param Name: Queue name (required)
@@ -1341,14 +1394,14 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         lines = msg.split('\n')
         status_code = self.__get_status_code(lines[0])
         if status_code is not None and status_code == 200:
-            if (len(msg) > 2) and self.RE_PATTERNS['does_not_exist_pattern'].match(lines[2]):
+            if (len(msg) > 2) and self.__pattern('does_not_exist_pattern').match(lines[2]):
                 return None
             pairs = self.__parse_response_dict(lines)
             return {key: [link.rstrip(',') for link in links.split()] for key, links in pairs.items()}
 
         raise UnexpectedMessageFormatError(f'Received status code is {status_code} instead of 200.')
 
-    def edit_ticket_links(self, ticket_id: str | int, **kwargs: typing.Any) -> bool:
+    def edit_ticket_links(self, ticket_id: str | int, **kwargs: object) -> bool:
         """Edit ticket links.
 
         .. warning:: This method is deprecated in favour of edit_link method, because
@@ -1373,7 +1426,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
             post_data += f'{key}: {value}\n'
         msg = self.__request(f'ticket/{ticket_id}/links', post_data={'content': post_data})
         state = msg.split('\n')[2]
-        return self.RE_PATTERNS['links_updated_pattern'].match(state) is not None
+        return self.__pattern('links_updated_pattern').match(state) is not None
 
     def edit_link(self, ticket_id: str | int, link_name: str, link_value: str | int, delete: bool = False) -> bool:
         """Creates or deletes a link between the specified tickets (undocumented API feature).
@@ -1398,9 +1451,9 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         msg = self.__request('ticket/link', post_data=post_data)
         state = msg.split('\n')[2]
         if delete:
-            return self.RE_PATTERNS['deleted_link_pattern'].match(state) is not None
+            return self.__pattern('deleted_link_pattern').match(state) is not None
 
-        return self.RE_PATTERNS['created_link_pattern'].match(state) is not None
+        return self.__pattern('created_link_pattern').match(state) is not None
 
     def merge_ticket(self, ticket_id: str | int, into_id: str | int) -> bool:
         """Merge ticket into another (undocumented API feature).
@@ -1415,7 +1468,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         """
         msg = self.__request(f'ticket/{ticket_id}/merge/{into_id}')
         state = msg.split('\n')[2]
-        return self.RE_PATTERNS['merge_successful_pattern'].match(state) is not None
+        return self.__pattern('merge_successful_pattern').match(state) is not None
 
     def take(self, ticket_id: str | int) -> bool:
         """Take ticket.

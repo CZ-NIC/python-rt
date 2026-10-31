@@ -13,6 +13,8 @@ Contents:
 
    rest1
    rest2
+   rest2_async
+   common
    usage
    changelog
    exceptions

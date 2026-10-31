@@ -46,8 +46,12 @@ class BadRequestError(RtError):
     """Exception raised when HTTP code 400 (Bad Request) is received."""
 
 
-class ConnectionError(RtError):
-    """Encapsulation of various exceptions indicating network problems."""
+class RtConnectionError(RtError, ConnectionError):
+    """Encapsulation of various exceptions indicating network problems.
+
+    It is a subclass of both :py:exc:`RtError` and the builtin :py:exc:`ConnectionError`,
+    so it can be caught as either of them.
+    """
 
     def __init__(self, message: str, cause: Exception) -> None:
         """Initialization of exception extended by cause parameter.

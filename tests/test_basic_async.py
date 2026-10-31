@@ -1,4 +1,7 @@
-"""Tests for python-rt / REST2 - Python interface to Request Tracker :term:`API`."""
+"""Tests for python-rt / REST2 - Python interface to Request Tracker :term:`API`.
+
+The sync tests (test_basic.py) are generated from the async tests (test_basic_async.py) using unasyncd.
+"""
 
 # ruff: noqa: S101, S105, S311
 
@@ -32,7 +35,8 @@ import httpx2
 import pytest
 
 import rt.exceptions
-import rt.rest2
+from rt.common import Attachment
+from rt.rest2_async import AsyncRt
 
 from . import random_string
 
@@ -42,22 +46,19 @@ RT_PASSWORD = 'password'
 RT_QUEUE = 'General'
 
 
-@pytest.mark.asyncio
-async def test_get_user(async_rt_connection: rt.rest2.AsyncRt):
+async def test_get_user(async_rt_connection: AsyncRt):
     user = await async_rt_connection.get_user(RT_USER)
     assert user['Name'] == RT_USER
     assert '@' in user['EmailAddress']
     assert user['Privileged'] == 1
 
 
-@pytest.mark.asyncio
 async def test_invalid_api_url():
     with pytest.raises(ValueError):
-        rt.rest2.AsyncRt(url='https://example.com', http_auth=httpx2.BasicAuth('dummy', 'dummy'))
+        AsyncRt(url='https://example.com', http_auth=httpx2.BasicAuth('dummy', 'dummy'))
 
 
-@pytest.mark.asyncio
-async def test_ticket_operations(async_rt_connection: rt.rest2.AsyncRt):
+async def test_ticket_operations(async_rt_connection: AsyncRt):
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = (
         'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
@@ -176,7 +177,7 @@ async def test_ticket_operations(async_rt_connection: rt.rest2.AsyncRt):
     attachment_content = b'Content of attachment.'
     attachment_name = 'attachment-name.txt'
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    attachment = rt.rest2.Attachment(attachment_name, 'text/plain', attachment_content)
+    attachment = Attachment(attachment_name, 'text/plain', attachment_content)
     assert await async_rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment])
 
     # reply with a comment
@@ -220,8 +221,7 @@ async def test_ticket_operations(async_rt_connection: rt.rest2.AsyncRt):
         assert await async_rt_connection.delete_ticket(999999999)
 
 
-@pytest.mark.asyncio
-async def test_attachments_create(async_rt_connection: rt.rest2.AsyncRt):
+async def test_attachments_create(async_rt_connection: AsyncRt):
     """Create a ticket with a random (>= 2) number of attachments and verify that they have been successfully added to the ticket."""
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = (
@@ -233,7 +233,7 @@ async def test_attachments_create(async_rt_connection: rt.rest2.AsyncRt):
     for _i in range(attachment_count):
         attachment_content = random_string(length=100).encode()
         attachment_name = f'attachment-{random_string(length=10)}.txt'
-        attachments.append(rt.rest2.Attachment(attachment_name, 'text/plain', attachment_content))
+        attachments.append(Attachment(attachment_name, 'text/plain', attachment_content))
 
     # create
     ticket_id = await async_rt_connection.create_ticket(
@@ -259,8 +259,7 @@ async def test_attachments_create(async_rt_connection: rt.rest2.AsyncRt):
         assert at_content == k.file_content
 
 
-@pytest.mark.asyncio
-async def test_attachments_search(async_rt_connection: rt.rest2.AsyncRt):
+async def test_attachments_search(async_rt_connection: AsyncRt):
     """Create a ticket with an attachments and verify that attachment search and filtering works correctly."""
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = (
@@ -269,7 +268,7 @@ async def test_attachments_search(async_rt_connection: rt.rest2.AsyncRt):
 
     attachment_content = random_string(length=100).encode()
     attachment_name = f'attachment-{random_string(length=10)}.txt'
-    attachment = rt.rest2.Attachment(attachment_name, 'text/plain', attachment_content)
+    attachment = Attachment(attachment_name, 'text/plain', attachment_content)
 
     ticket_id = await async_rt_connection.create_ticket(
         subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment]
@@ -283,8 +282,7 @@ async def test_attachments_search(async_rt_connection: rt.rest2.AsyncRt):
     assert at_list[0]['Headers']
 
 
-@pytest.mark.asyncio
-async def test_attachments_comment(async_rt_connection: rt.rest2.AsyncRt):
+async def test_attachments_comment(async_rt_connection: AsyncRt):
     """Create a ticket and comment to it with a random (>= 2) number of attachments and verify that they have been successfully added to the ticket."""
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = (
@@ -300,7 +298,7 @@ async def test_attachments_comment(async_rt_connection: rt.rest2.AsyncRt):
     for _i in range(attachment_count):
         attachment_content = random_string(length=100).encode()
         attachment_name = f'attachment-{random_string(length=10)}.txt'
-        attachments.append(rt.rest2.Attachment(attachment_name, 'text/plain', attachment_content))
+        attachments.append(Attachment(attachment_name, 'text/plain', attachment_content))
 
     # comment with attachments
     ticket_text = (
@@ -323,8 +321,7 @@ async def test_attachments_comment(async_rt_connection: rt.rest2.AsyncRt):
         assert at_content == k.file_content
 
 
-@pytest.mark.asyncio
-async def test_attachments_reply(async_rt_connection: rt.rest2.AsyncRt):
+async def test_attachments_reply(async_rt_connection: AsyncRt):
     """Create a ticket and reply to it with a random (>= 2) number of attachments and verify that they have been successfully added to the ticket."""
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = (
@@ -340,7 +337,7 @@ async def test_attachments_reply(async_rt_connection: rt.rest2.AsyncRt):
     for _i in range(attachment_count):
         attachment_content = random_string(length=100).encode()
         attachment_name = f'attachment-{random_string(length=10)}.txt'
-        attachments.append(rt.rest2.Attachment(attachment_name, 'text/plain', attachment_content))
+        attachments.append(Attachment(attachment_name, 'text/plain', attachment_content))
 
     # comment with attachments
     ticket_text = (
@@ -363,8 +360,7 @@ async def test_attachments_reply(async_rt_connection: rt.rest2.AsyncRt):
         assert at_content == k.file_content
 
 
-@pytest.mark.asyncio
-async def test_ticket_operations_admincc_cc(async_rt_connection: rt.rest2.AsyncRt):
+async def test_ticket_operations_admincc_cc(async_rt_connection: AsyncRt):
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = (
         'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
@@ -425,8 +421,7 @@ async def test_ticket_operations_admincc_cc(async_rt_connection: rt.rest2.AsyncR
     assert compare_list(admincc, ticket['AdminCc'])
 
 
-@pytest.mark.asyncio
-async def test_users(async_rt_connection: rt.rest2.AsyncRt):
+async def test_users(async_rt_connection: AsyncRt):
     assert await async_rt_connection.get_user('tester1@example.com') is not None
     assert await async_rt_connection.user_exists('root', privileged=True) is True
     assert await async_rt_connection.user_exists('tester1@example.com', privileged=False) is True
@@ -446,8 +441,7 @@ async def test_users(async_rt_connection: rt.rest2.AsyncRt):
     assert await async_rt_connection.edit_user(user_id=random_user_name, RealName=random_user_name)
 
 
-@pytest.mark.asyncio
-async def test_queues(async_rt_connection: rt.rest2.AsyncRt):
+async def test_queues(async_rt_connection: AsyncRt):
     queue = await async_rt_connection.get_queue(RT_QUEUE)
     assert queue['Name'] == RT_QUEUE
 
@@ -486,14 +480,12 @@ async def test_queues(async_rt_connection: rt.rest2.AsyncRt):
         await async_rt_connection.delete_queue(f'Queue {random_string()}')
 
 
-@pytest.mark.asyncio
-async def test_catalog(async_rt_connection: rt.rest2.AsyncRt):
+async def test_catalog(async_rt_connection: AsyncRt):
     catalog = await async_rt_connection.get_catalog(1)
     assert catalog['id'] == 1
 
 
-@pytest.mark.asyncio
-async def test_assets(async_rt_connection: rt.rest2.AsyncRt):
+async def test_assets(async_rt_connection: AsyncRt):
     asset_name = random_string()
     asset_name_new = random_string()
 

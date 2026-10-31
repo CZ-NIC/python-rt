@@ -60,9 +60,7 @@ async def test_invalid_api_url():
 
 async def test_ticket_operations(async_rt_connection: AsyncRt):
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     # empty search result
     search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject)]
@@ -86,9 +84,7 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     assert 'Requestor' not in search_result[0].keys()
 
     # search with query_format field dict
-    search_result = [
-        item async for item in async_rt_connection.search(Subject=ticket_subject, query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})
-    ]
+    search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject, query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})]
     assert len(search_result) == 1
     assert 'Subject' not in search_result[0]
     assert 'Status' not in search_result[0]
@@ -224,9 +220,7 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
 async def test_attachments_create(async_rt_connection: AsyncRt):
     """Create a ticket with a random (>= 2) number of attachments and verify that they have been successfully added to the ticket."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     attachment_count = random.randint(2, 10)
     attachments = []
@@ -236,9 +230,7 @@ async def test_attachments_create(async_rt_connection: AsyncRt):
         attachments.append(Attachment(attachment_name, 'text/plain', attachment_content))
 
     # create
-    ticket_id = await async_rt_connection.create_ticket(
-        subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=attachments
-    )
+    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=attachments)
     assert ticket_id > -1
 
     # get ticket
@@ -262,17 +254,13 @@ async def test_attachments_create(async_rt_connection: AsyncRt):
 async def test_attachments_search(async_rt_connection: AsyncRt):
     """Create a ticket with an attachments and verify that attachment search and filtering works correctly."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     attachment_content = random_string(length=100).encode()
     attachment_name = f'attachment-{random_string(length=10)}.txt'
     attachment = Attachment(attachment_name, 'text/plain', attachment_content)
 
-    ticket_id = await async_rt_connection.create_ticket(
-        subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment]
-    )
+    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment])
 
     at_list = [item async for item in async_rt_connection.get_attachments(ticket_id, query_format=['TransactionId', 'Headers'])]
     assert at_list
@@ -285,9 +273,7 @@ async def test_attachments_search(async_rt_connection: AsyncRt):
 async def test_attachments_comment(async_rt_connection: AsyncRt):
     """Create a ticket and comment to it with a random (>= 2) number of attachments and verify that they have been successfully added to the ticket."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     # create
     ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
@@ -301,9 +287,7 @@ async def test_attachments_comment(async_rt_connection: AsyncRt):
         attachments.append(Attachment(attachment_name, 'text/plain', attachment_content))
 
     # comment with attachments
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
     comment_success = await async_rt_connection.comment(ticket_id=ticket_id, content=ticket_text, attachments=attachments)
     assert comment_success
 
@@ -324,9 +308,7 @@ async def test_attachments_comment(async_rt_connection: AsyncRt):
 async def test_attachments_reply(async_rt_connection: AsyncRt):
     """Create a ticket and reply to it with a random (>= 2) number of attachments and verify that they have been successfully added to the ticket."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     # create
     ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
@@ -340,9 +322,7 @@ async def test_attachments_reply(async_rt_connection: AsyncRt):
         attachments.append(Attachment(attachment_name, 'text/plain', attachment_content))
 
     # comment with attachments
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
     comment_success = await async_rt_connection.reply(ticket_id=ticket_id, content=ticket_text, attachments=attachments)
     assert comment_success
 
@@ -362,9 +342,7 @@ async def test_attachments_reply(async_rt_connection: AsyncRt):
 
 async def test_ticket_operations_admincc_cc(async_rt_connection: AsyncRt):
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     def compare_list(from_list: list[str], ticket_list: list[dict]) -> bool:
         """Lists (Requestor, AdminCc, Cc) returned from REST2 contain a list of dicts with additional user information.
@@ -522,9 +500,7 @@ async def test_assets(async_rt_connection: AsyncRt):
     items = [item async for item in search]
     assert items
 
-    search = async_rt_connection.search_assets(
-        1, [{'field': 'Name', 'value': asset_name_new}], query_format={'fields': 'Owner', 'fields[Owner]': 'Name'}
-    )
+    search = async_rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}], query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})
     items = [item async for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['Name'] == 'Nobody'

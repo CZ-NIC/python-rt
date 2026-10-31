@@ -63,9 +63,7 @@ def test_invalid_api_url():
 
 def test_ticket_operations(rt_connection: Rt):
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     # empty search result
     search_result = [item for item in rt_connection.search(Subject=ticket_subject)]
@@ -89,9 +87,7 @@ def test_ticket_operations(rt_connection: Rt):
     assert 'Requestor' not in search_result[0].keys()
 
     # search with query_format field dict
-    search_result = [
-        item for item in rt_connection.search(Subject=ticket_subject, query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})
-    ]
+    search_result = [item for item in rt_connection.search(Subject=ticket_subject, query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})]
     assert len(search_result) == 1
     assert 'Subject' not in search_result[0]
     assert 'Status' not in search_result[0]
@@ -227,9 +223,7 @@ def test_ticket_operations(rt_connection: Rt):
 def test_attachments_create(rt_connection: Rt):
     """Create a ticket with a random (>= 2) number of attachments and verify that they have been successfully added to the ticket."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     attachment_count = random.randint(2, 10)
     attachments = []
@@ -263,9 +257,7 @@ def test_attachments_create(rt_connection: Rt):
 def test_attachments_search(rt_connection: Rt):
     """Create a ticket with an attachments and verify that attachment search and filtering works correctly."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     attachment_content = random_string(length=100).encode()
     attachment_name = f'attachment-{random_string(length=10)}.txt'
@@ -284,9 +276,7 @@ def test_attachments_search(rt_connection: Rt):
 def test_attachments_comment(rt_connection: Rt):
     """Create a ticket and comment to it with a random (>= 2) number of attachments and verify that they have been successfully added to the ticket."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     # create
     ticket_id = rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
@@ -300,9 +290,7 @@ def test_attachments_comment(rt_connection: Rt):
         attachments.append(Attachment(attachment_name, 'text/plain', attachment_content))
 
     # comment with attachments
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
     comment_success = rt_connection.comment(ticket_id=ticket_id, content=ticket_text, attachments=attachments)
     assert comment_success
 
@@ -323,9 +311,7 @@ def test_attachments_comment(rt_connection: Rt):
 def test_attachments_reply(rt_connection: Rt):
     """Create a ticket and reply to it with a random (>= 2) number of attachments and verify that they have been successfully added to the ticket."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     # create
     ticket_id = rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
@@ -339,9 +325,7 @@ def test_attachments_reply(rt_connection: Rt):
         attachments.append(Attachment(attachment_name, 'text/plain', attachment_content))
 
     # comment with attachments
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
     comment_success = rt_connection.reply(ticket_id=ticket_id, content=ticket_text, attachments=attachments)
     assert comment_success
 
@@ -361,9 +345,7 @@ def test_attachments_reply(rt_connection: Rt):
 
 def test_ticket_operations_admincc_cc(rt_connection: Rt):
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     def compare_list(from_list: list[str], ticket_list: list[dict]) -> bool:
         """Lists (Requestor, AdminCc, Cc) returned from REST2 contain a list of dicts with additional user information.
@@ -521,9 +503,7 @@ def test_assets(rt_connection: Rt):
     items = [item for item in search]
     assert items
 
-    search = rt_connection.search_assets(
-        1, [{'field': 'Name', 'value': asset_name_new}], query_format={'fields': 'Owner', 'fields[Owner]': 'Name'}
-    )
+    search = rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}], query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})
     items = [item for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['Name'] == 'Nobody'

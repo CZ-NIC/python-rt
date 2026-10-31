@@ -290,7 +290,7 @@ class Rt:
 
         The request body is not logged as it may contain credentials (login).
         """
-        self.logger.debug('### %s', dt.datetime.now(tz=dt.timezone.utc).isoformat())
+        self.logger.debug('### %s', dt.datetime.now(tz=dt.UTC).isoformat())
         self.logger.debug('Request URL: %s', response.request.url)
         self.logger.debug('Request method: %s', response.request.method)
         self.logger.debug('Response status code: %s', str(response.status_code))
@@ -633,9 +633,7 @@ class Rt:
         if Format == 'l':
             return [self.__parse_response_ticket(ticket_msg) for ticket_msg in msg.split('\n--\n')]
         if Format == 's':
-            return [
-                {'id': 'ticket/' + key, 'numerical_id': key, 'Subject': value} for key, value in self.__parse_response_dict(msg).items()
-            ]
+            return [{'id': 'ticket/' + key, 'numerical_id': key, 'Subject': value} for key, value in self.__parse_response_dict(msg).items()]
         if Format == 'i':
             items: list[dict[str, str | typing.Sequence[str]]] = []
             msgs = lines[2:]
@@ -806,9 +804,7 @@ class Rt:
         state = msg.split('\n')[2]
         return self.__pattern('update_pattern').match(state) is not None
 
-    def get_history(
-        self, ticket_id: str | int, transaction_id: str | int | None = None
-    ) -> list[dict[str, str | list[tuple[int, str]]]] | None:
+    def get_history(self, ticket_id: str | int, transaction_id: str | int | None = None) -> list[dict[str, str | list[tuple[int, str]]]] | None:
         """Get set of history items.
 
         :param ticket_id: ID of ticket
@@ -835,9 +831,7 @@ class Rt:
         else:
             msgs = self.__request(f'ticket/{ticket_id}/history/id/{transaction_id}')
         lines = msgs.split('\n')
-        if (len(lines) > 2) and (
-            self.__pattern('does_not_exist_pattern').match(lines[2]) or self.__pattern('not_related_pattern').match(lines[2])
-        ):
+        if (len(lines) > 2) and (self.__pattern('does_not_exist_pattern').match(lines[2]) or self.__pattern('not_related_pattern').match(lines[2])):
             return None
         items = typing.cast(
             'list[dict[str, str | list[tuple[int, str]]]]',
@@ -1083,8 +1077,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         """
         msg = self.__request(f'ticket/{ticket_id}/attachments/{attachment_id}', text_response=False).split(b'\n')
         if (len(msg) > 2) and (
-            self.__bytes_pattern('invalid_attachment_pattern_bytes').match(msg[2])
-            or self.__bytes_pattern('does_not_exist_pattern_bytes').match(msg[2])
+            self.__bytes_pattern('invalid_attachment_pattern_bytes').match(msg[2]) or self.__bytes_pattern('does_not_exist_pattern_bytes').match(msg[2])
         ):
             return None
         msg = msg[2:]
@@ -1141,8 +1134,7 @@ Content-Type: {}""".format(str(ticket_id), action, re.sub(r'\n', r'\n      ', te
         msg = self.__request(f'ticket/{ticket_id}/attachments/{attachment_id}/content', text_response=False)
         lines = msg.split(b'\n', 3)
         if (len(lines) == 4) and (
-            self.__bytes_pattern('invalid_attachment_pattern_bytes').match(lines[2])
-            or self.__bytes_pattern('does_not_exist_pattern_bytes').match(lines[2])
+            self.__bytes_pattern('invalid_attachment_pattern_bytes').match(lines[2]) or self.__bytes_pattern('does_not_exist_pattern_bytes').match(lines[2])
         ):
             return None
         return msg[msg.find(b'\n') + 2 :]

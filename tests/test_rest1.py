@@ -114,9 +114,7 @@ class RtTestCase(unittest.TestCase):
     @unittest.skipUnless(_have_creds(RT_VALID_CREDENTIALS), 'missing credentials required to run test')
     def test_ticket_operations(self):
         ticket_subject = 'Testing issue ' + ''.join([random.choice(string.ascii_letters) for i in range(15)])
-        ticket_text = (
-            'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-        )
+        ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
         for name in ('RT4.4 stable',):
             url = self.RT_VALID_CREDENTIALS[name]['url']
             default_login = self.RT_VALID_CREDENTIALS[name]['support']['default_login']
@@ -206,9 +204,7 @@ class RtTestCase(unittest.TestCase):
     @unittest.skipUnless(_have_creds(RT_VALID_CREDENTIALS), 'missing credentials required to run test')
     def test_ticket_operations_admincc_cc(self):
         ticket_subject = 'Testing issue ' + ''.join([random.choice(string.ascii_letters) for i in range(15)])
-        ticket_text = (
-            'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-        )
+        ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
         for name in ('RT4.4 stable',):
             url = self.RT_VALID_CREDENTIALS[name]['url']
             default_login = self.RT_VALID_CREDENTIALS[name]['support']['default_login']

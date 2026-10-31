@@ -42,9 +42,7 @@ from .conftest import RT_QUEUE
 def test_ticket_attachments(rt_connection: Rt):
     """Test various ticket attachment operations."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
     attachment_content = b'Content of attachment.'
     attachment_name = 'attachment-name.txt'
 
@@ -73,18 +71,14 @@ def test_ticket_attachments(rt_connection: Rt):
     att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, query_filter=[])]
     assert len(att_ids) == 3
 
-    att_ids = [
-        item for item in rt_connection.get_attachments_ids(ticket_id, query_filter=[{'field': 'Filename', 'value': 'non-existant.txt'}])
-    ]
+    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, query_filter=[{'field': 'Filename', 'value': 'non-existant.txt'}])]
     assert not att_ids
 
 
 def test_ticket_take(rt_connection: Rt):
     """Test take/untake."""
     ticket_subject = f'Testing issue {random_string()}'
-    ticket_text = (
-        'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    )
+    ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     ticket_id = rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id

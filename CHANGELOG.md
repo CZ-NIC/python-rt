@@ -8,6 +8,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 This release contains breaking changes. Most code only needs the adaptations below; the entries in the following
 sections describe all changes in detail.
 
+Python 3.11 or newer is required.
+
 #### Exceptions
 - `rt.exceptions.ConnectionError` was renamed to `rt.exceptions.RtConnectionError`. Code catching the builtin
   `ConnectionError` keeps working, as `RtConnectionError` is a subclass of it:
@@ -71,6 +73,7 @@ sections describe all changes in detail.
 - The `base_url` attribute was removed; use `tracker.url.removesuffix('REST/2.0/')` if needed.
 
 ### Changes
+- **Breaking:** Remove support for Python 3.10, which reached its end of life; Python >= 3.11 is required.
 - **Breaking:** Replace *requests* with *httpx2* for the REST1 part; *requests* is no longer a dependency.
   - `Rt.session` is now an `httpx2.Client` instead of a `requests.Session`.
   - `http_auth` expects an `httpx2.Auth` instance (e.g. `httpx2.BasicAuth`, `httpx2.DigestAuth`).

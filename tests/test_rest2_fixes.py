@@ -176,7 +176,7 @@ def test_last_updated_with_date_objects(rt_connection: Rt):
     rt_connection.create_queue(queue_name)
     ticket_id = rt_connection.create_ticket(queue=queue_name, subject='Last updated test', content='Test')
     last_updated = (rt_connection.get_ticket(ticket_id))['LastUpdated']
-    updated = dt.datetime.strptime(last_updated, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc)
+    updated = dt.datetime.strptime(last_updated, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.UTC)
 
     def found(since: dt.date) -> list[int]:
         return [int(ticket['id']) for ticket in rt_connection.last_updated(since, queue=queue_name)]
@@ -186,7 +186,7 @@ def test_last_updated_with_date_objects(rt_connection: Rt):
 
     # a datetime with timezone is an exact point in time, in any timezone
     plus_two_hours = dt.timezone(dt.timedelta(hours=2))
-    for timezone in (dt.timezone.utc, plus_two_hours):
+    for timezone in (dt.UTC, plus_two_hours):
         assert found((updated - dt.timedelta(minutes=1)).astimezone(timezone)) == [ticket_id]
         assert found((updated + dt.timedelta(minutes=1)).astimezone(timezone)) == []
 

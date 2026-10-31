@@ -174,7 +174,7 @@ async def test_last_updated_with_date_objects(async_rt_connection: AsyncRt):
     await async_rt_connection.create_queue(queue_name)
     ticket_id = await async_rt_connection.create_ticket(queue=queue_name, subject='Last updated test', content='Test')
     last_updated = (await async_rt_connection.get_ticket(ticket_id))['LastUpdated']
-    updated = dt.datetime.strptime(last_updated, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc)
+    updated = dt.datetime.strptime(last_updated, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.UTC)
 
     async def found(since: dt.date) -> list[int]:
         return [int(ticket['id']) async for ticket in async_rt_connection.last_updated(since, queue=queue_name)]
@@ -184,7 +184,7 @@ async def test_last_updated_with_date_objects(async_rt_connection: AsyncRt):
 
     # a datetime with timezone is an exact point in time, in any timezone
     plus_two_hours = dt.timezone(dt.timedelta(hours=2))
-    for timezone in (dt.timezone.utc, plus_two_hours):
+    for timezone in (dt.UTC, plus_two_hours):
         assert await found((updated - dt.timedelta(minutes=1)).astimezone(timezone)) == [ticket_id]
         assert await found((updated + dt.timedelta(minutes=1)).astimezone(timezone)) == []
 

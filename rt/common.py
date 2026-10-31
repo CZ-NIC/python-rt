@@ -46,8 +46,7 @@ SearchFormat: typing.TypeAlias = typing.Literal['i', 's', 'l']
 
 # Fields returned for each ticket by a ticket search with format 'l'.
 _SEARCH_LONG_FORMAT_FIELDS = (
-    'Owner,Status,Created,Subject,Queue,CustomFields,Requestor,Cc,AdminCc,Started,Created,TimeEstimated,Due,Type,'
-    'InitialPriority,Priority,TimeLeft,LastUpdated'
+    'Owner,Status,Created,Subject,Queue,CustomFields,Requestor,Cc,AdminCc,Started,Created,TimeEstimated,Due,Type,InitialPriority,Priority,TimeLeft,LastUpdated'
 )
 
 # Actions for adding a message to a ticket.
@@ -58,9 +57,7 @@ _CORRESPOND_ACTIONS: tuple[str, ...] = typing.get_args(_CorrespondAction)
 JSONValue: typing.TypeAlias = str | int | float | bool | None | list['JSONValue'] | dict[str, 'JSONValue']
 
 # JSON data sent to RT. The read-only collection types also accept e.g. a ``dict[str, str]`` or ``list[str]``.
-JSONInput: typing.TypeAlias = (
-    str | int | float | bool | None | collections.abc.Sequence['JSONInput'] | collections.abc.Mapping[str, 'JSONInput']
-)
+JSONInput: typing.TypeAlias = str | int | float | bool | None | collections.abc.Sequence['JSONInput'] | collections.abc.Mapping[str, 'JSONInput']
 
 # Query parameters added to the URL of a request.
 QueryParams: typing.TypeAlias = collections.abc.Mapping[str, str | int]
@@ -121,9 +118,6 @@ _QUEUE_FIELDS = frozenset(
 
 # Request headers which are not written to the debug log, as they contain credentials.
 _REDACTED_HEADERS = frozenset({'authorization', 'proxy-authorization', 'cookie'})
-
-
-SelfT = typing.TypeVar('SelfT')
 
 # Operators which can be used in searches by appending their name to a field name, e.g. Subject__like='foo'.
 _SEARCH_OPERATORS = {

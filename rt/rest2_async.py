@@ -30,7 +30,6 @@ from .common import (
     JSONValue,
     QueryParams,
     SearchFormat,
-    SelfT,
     TicketLinkName,
     _build_ticket_query,
     _check_fields,
@@ -137,13 +136,9 @@ class AsyncRt:
         self.per_page = per_page
 
         if client is not None:
-            connection_settings_specified = (
-                proxy is not None or verify_cert is not True or http_auth is not None or token is not None or http_timeout != 20
-            )
+            connection_settings_specified = proxy is not None or verify_cert is not True or http_auth is not None or token is not None or http_timeout != 20
             if connection_settings_specified:
-                raise ValueError(
-                    'proxy, verify_cert, http_auth, token and http_timeout can not be used together with client, configure the client instead.'
-                )
+                raise ValueError('proxy, verify_cert, http_auth, token and http_timeout can not be used together with client, configure the client instead.')
 
             self.session = client
             # the client is owned by the caller, who is responsible for closing it
@@ -171,7 +166,7 @@ class AsyncRt:
         if self._close_session:
             await self.session.aclose()
 
-    async def __aenter__(self: SelfT) -> SelfT:  # typing.Self requires Python >= 3.11
+    async def __aenter__(self) -> typing.Self:
         """Enter the context manager."""
         return self
 
@@ -201,7 +196,7 @@ class AsyncRt:
             else:
                 headers[name] = value
 
-        self.logger.debug('### %s', dt.datetime.now(tz=dt.timezone.utc).isoformat())
+        self.logger.debug('### %s', dt.datetime.now(tz=dt.UTC).isoformat())
         self.logger.debug('Request URL: %s', request.url)
         self.logger.debug('Request method: %s', request.method)
         self.logger.debug('Request headers: %s', headers)
@@ -499,7 +494,7 @@ class AsyncRt:
         if isinstance(date, dt.datetime):
             if date.utcoffset() is not None:
                 # RT only respects the timezone of a time in ISO 8601 format in UTC (with suffix "Z")
-                return date.astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                return date.astimezone(dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
             return date.strftime('%Y-%m-%d %H:%M:%S')
 
         if isinstance(date, dt.date):

@@ -22,10 +22,7 @@ def test_build_ticket_query():
     assert rt.common._build_ticket_query(None, None, {'Subject__like': 'x', 'Priority__gte': 5}) == "(Subject LIKE 'x') AND (Priority>='5')"
     assert rt.common._build_ticket_query(None, None, {'CF_My Field': "it's"}) == "('CF.{My Field}'='it\\'s')"
     assert rt.common._build_ticket_query(None, None, {'CF_my__field__exact': 'x'}) == "('CF.{my__field}'='x')"
-    assert (
-        rt.common._build_ticket_query(None, None, {'Resolved__is': None, 'Told__isnot': 'null'})
-        == '(Resolved IS NULL) AND (Told IS NOT NULL)'
-    )
+    assert rt.common._build_ticket_query(None, None, {'Resolved__is': None, 'Told__isnot': 'null'}) == '(Resolved IS NULL) AND (Told IS NOT NULL)'
 
     # the raw query is used as is and the conditions are ignored
     assert rt.common._build_ticket_query('General', "Status = 'open'", {'Subject': 'x'}) == "(Queue='General') AND (Status = 'open')"

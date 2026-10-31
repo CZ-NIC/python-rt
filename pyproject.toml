@@ -19,7 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-requires-python = ">= 3.10"
+requires-python = ">= 3.11"
 dependencies = [
   "httpx2~=2.7",
 ]
@@ -114,9 +114,9 @@ testpaths = [
 ]
 
 [tool.ruff]
-line-length = 140
+line-length = 160
 indent-width = 4
-target-version = "py310"
+target-version = "py311"
 include = [
   "pyproject.toml",
   "rt/**/*.py",

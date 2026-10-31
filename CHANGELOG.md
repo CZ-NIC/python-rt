@@ -3,6 +3,160 @@ All notable changes to this project will be documented in this file.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Migration guide
+This release contains breaking changes. Most code only needs the adaptations below; the entries in the following
+sections describe all changes in detail.
+
+#### Exceptions
+- `rt.exceptions.ConnectionError` was renamed to `rt.exceptions.RtConnectionError`. Code catching the builtin
+  `ConnectionError` keeps working, as `RtConnectionError` is a subclass of it:
+  ```python
+  # before
+  except rt.exceptions.ConnectionError: ...
+  # after
+  except rt.exceptions.RtConnectionError: ...
+  ```
+- REST2 raises `rt.exceptions.UnexpectedResponseError` instead of `json.JSONDecodeError` for responses which are not
+  valid JSON.
+
+#### REST1
+- Pass all constructor arguments by keyword, as well as `cc`, `bcc`, `content_type` and `files` of `reply()`/`comment()`:
+  ```python
+  # before
+  tracker = rt.rest1.Rt('https://rt.example.com/REST/1.0/', 'user', 'password')
+  tracker.reply(1, 'Hello', 'cc@example.com')
+  # after
+  tracker = rt.rest1.Rt(url='https://rt.example.com/REST/1.0/', default_login='user', default_password='password')
+  tracker.reply(1, 'Hello', cc='cc@example.com')
+  ```
+- *httpx2* replaces *requests*: use the httpx2 authentication classes, and `Rt.session` is an `httpx2.Client`:
+  ```python
+  # before
+  rt.rest1.Rt(url=url, http_auth=requests.auth.HTTPBasicAuth('user', 'password'))
+  # after
+  rt.rest1.Rt(url=url, http_auth=httpx2.BasicAuth('user', 'password'))
+  ```
+- Credentials in `.netrc` files are no longer used automatically, redirects are not followed, requests time out
+  after 20 seconds (`http_timeout=None` disables the timeout) and files to attach must be bytes or binary file objects.
+
+#### REST2
+- Import `AsyncRt` from `rt.rest2_async` and pass all constructor arguments by keyword (also for `Rt`):
+  ```python
+  # before
+  tracker = rt.rest2.AsyncRt('https://rt.example.com/REST/2.0/', http_auth=httpx2.BasicAuth('user', 'password'))
+  # after
+  import rt.rest2_async
+  tracker = rt.rest2_async.AsyncRt(url='https://rt.example.com/REST/2.0/', http_auth=httpx2.BasicAuth('user', 'password'))
+  ```
+- The sync `get_ticket_history()`, `get_attachments()`, `get_attachments_ids()` and `get_all_queues()` return iterators
+  instead of lists; wrap them in `list()` if a list is needed:
+  ```python
+  history = list(tracker.get_ticket_history(ticket_id))
+  ```
+- The async `new_correspondence()` and `last_updated()` are iterated without `await`:
+  ```python
+  # before
+  async for ticket in await tracker.last_updated('2024-01-01'): ...
+  # after
+  async for ticket in tracker.last_updated('2024-01-01'): ...
+  ```
+- `search()` quotes and escapes all values, so remove any manual escaping of quotes in values (`raw_query` is still
+  passed to RT as is). Unknown operator suffixes (e.g. `Subject__likee`) raise `InvalidUseError`, and a field name
+  containing `__` needs an explicit operator, e.g. `CF_my__field__exact='value'`.
+- `reply()` and `comment()` raise `ValueError` for a `content_type` other than `text/plain` or `text/html`.
+- `http_auth` and `token` can not be combined anymore.
+- The type aliases `TYPE_VALID_TICKET_LINK_NAMES` and `TYPE_CONTENT_TYPE` were renamed to `TicketLinkName` and `ContentType`.
+- `Attachment` is immutable; create a modified copy with `dataclasses.replace(attachment, file_name='new.txt')`.
+- The `base_url` attribute was removed; use `tracker.url.removesuffix('REST/2.0/')` if needed.
+
+### Changes
+- **Breaking:** Replace *requests* with *httpx2* for the REST1 part; *requests* is no longer a dependency.
+  - `Rt.session` is now an `httpx2.Client` instead of a `requests.Session`.
+  - `http_auth` expects an `httpx2.Auth` instance (e.g. `httpx2.BasicAuth`, `httpx2.DigestAuth`).
+  - `verify_cert` accepts `True`/`False` or the path to a CA bundle file.
+  - Credentials from `.netrc` files are no longer used automatically.
+  - Redirects are no longer followed.
+  - Responses are decoded using the charset sent by RT (UTF-8 if none); undecodable bytes are replaced instead of raising.
+  - Files to attach must be passed as bytes or binary file objects.
+  - Requests time out after 20 seconds by default.
+- **Breaking:** Split the REST2 sync and async implementations: `AsyncRt` moved to `rt.rest2_async`
+  (use `rt.rest2_async.AsyncRt` instead of `rt.rest2.AsyncRt`).
+  `rt.rest2` is now generated from `rt.rest2_async` using *unasyncd*.
+- **Breaking:** The sync REST2 methods `get_ticket_history`, `get_attachments`, `get_attachments_ids` and `get_all_queues`
+  now return iterators, like their async counterparts, instead of lists. Wrap them in `list()` if a list is needed.
+  Errors (e.g. for a non-existent ticket) are raised when iterating instead of when calling the method.
+- Move the REST2 `Attachment` class to `rt.common`; it is still available as `rt.rest2.Attachment` and `rt.rest2_async.Attachment`.
+- **Breaking:** `AsyncRt.new_correspondence()` and `AsyncRt.last_updated()` return async iterators directly, like all other
+  methods returning multiple results: use `async for ticket in tracker.last_updated(...)` without `await`.
+- **Breaking:** Values passed to the REST2 `search()` (including the queue name and the date of `last_updated()`) are now
+  quoted and escaped, so they can not change the meaning of the query (TicketSQL injection). Values which were escaped
+  manually before must not be escaped anymore. `raw_query` is still passed to RT as is.
+- **Breaking:** REST2 clients raise `ValueError` if both `http_auth` and `token` are specified.
+- **Breaking:** REST2 `search()` raises `InvalidUseError` for an unsupported operator suffix (e.g. `Subject__likee`),
+  which was silently treated as `=` before. A field name containing `__` must be followed by an operator,
+  e.g. `CF_my__field__exact='value'`.
+- **Breaking:** REST2 `reply()` and `comment()` raise `ValueError` for a `content_type` other than `text/plain` or
+  `text/html` before sending the request, like `create_ticket()` already did.
+- **Breaking:** All parameters of the REST1 `Rt` constructor are keyword-only,
+  e.g. `Rt(url='https://rt.example.com/REST/1.0/', default_login=..., default_password=...)`.
+- **Breaking:** Rename the type aliases `TYPE_VALID_TICKET_LINK_NAMES` to `TicketLinkName` and `TYPE_CONTENT_TYPE`
+  to `ContentType`.
+- **Breaking:** `Attachment` is immutable (frozen dataclass with slots).
+- **Breaking:** All parameters of the REST2 `Rt`/`AsyncRt` constructors are keyword-only,
+  e.g. `Rt(url='https://rt.example.com/REST/2.0/', http_auth=...)`.
+- **Breaking:** Remove the unused `base_url` attribute of the REST2 `Rt`/`AsyncRt` classes.
+- **Breaking:** Rename `rt.exceptions.ConnectionError` to `rt.exceptions.RtConnectionError`, so it no longer shadows the
+  builtin `ConnectionError`. It is now raised for connection and transport errors in REST1 and REST2 (before, the builtin
+  `ConnectionError` was raised). As it is a subclass of both `RtError` and the builtin `ConnectionError`, existing
+  `except ConnectionError` code keeps working.
+- **Breaking:** The parameters `cc`, `bcc`, `content_type` and `files` of the REST1 `reply()` and `comment()` are keyword-only.
+- REST2 raises `UnexpectedResponseError` instead of `json.JSONDecodeError` if RT (or a proxy in between) returns an invalid
+  JSON response, e.g. an HTML login page.
+- REST2 debug logging no longer contains credentials (the `Authorization` header is redacted, request bodies are not logged)
+  and is only prepared if debug logging is enabled.
+- REST2 requests 100 items per page (the maximum supported by RT) instead of 20 for paginated results by default,
+  which reduces the number of requests. The page size can be set with the new `per_page` constructor parameter.
+- The package is now type checked with `mypy --strict`. Type hints are more precise, which may require adaptations
+  in code that is type checked as well (runtime behaviour is unchanged):
+  - REST2: values passed as `**kwargs` to create/edit methods are typed as JSON data (`rt.common.JSONInput`), query
+    parameters as `rt.common.QueryParams`. Returned RT objects stay `dict[str, Any]`.
+  - REST1: return types are concrete instead of `dict`, e.g. `search()` returns `list[dict[str, str | Sequence[str]]]`.
+    Ticket fields passed to `create_ticket()`/`edit_ticket()` are typed `str | list[str] | tuple[str, ...]`, which are
+    the only types these methods ever supported. Files to attach are typed `rt.rest1.FileTuple`.
+- REST2 validates the content of responses (e.g. status messages must be strings, created objects must have an ID)
+  and raises `UnexpectedResponseError` instead of failing later with an unrelated error.
+### Fixed
+- REST2: IDs and names used in URLs (e.g. user or queue names) are percent-encoded, so they can no longer change
+  the requested endpoint. Previously e.g. `get_user('../ticket/1')` returned ticket 1, and names containing `?` or `#`
+  were truncated.
+- REST2 `search()` with custom fields (`CF_<name>=...`) created a malformed query and always failed.
+- REST2 `search()` failed for values containing a single quote.
+- REST2 `edit_ticket()` did not detect non-existent users or queues for many names (e.g. queue "Support").
+- REST2 paginated results: no `NotFoundError` anymore for empty results of users who are not allowed to see all results
+  (RT >= 5.0.5), no more missing results after a page whose items are all hidden from the user, and no more duplicate
+  results if items are deleted while iterating.
+- REST2 `search_assets()` modified the `search_params` list passed by the caller.
+- REST2 `last_updated()` accepted invalid dates like 2024-02-30.
+- REST2 delete operations treated a non-JSON response other than "204 No Content" (e.g. an HTML page returned by a proxy)
+  as success.
+### Added
+- Add an `http_timeout` parameter to the REST1 `Rt` class.
+- REST2 clients accept an own HTTP client via the new `client` constructor parameter (an `httpx2.Client` for `Rt`,
+  an `httpx2.AsyncClient` for `AsyncRt`), e.g. configured with a custom transport, retries, event hooks or HTTP/2.
+  It can not be combined with `proxy`, `verify_cert`, `http_auth`, `token` and `http_timeout`, and it is not closed
+  by `close()`/`aclose()`, as it is owned by the caller.
+- REST2 `last_updated()` accepts `datetime.date` and `datetime.datetime` objects. A `datetime` with timezone is
+  converted to UTC and therefore an exact point in time; dates and naive datetimes (like strings) are interpreted by
+  RT in the timezone of the RT user.
+- Add `rt.common.SearchFormat` for the `query_format` values `'i'`, `'s'` and `'l'` of the REST2 `search()`.
+- Add `rt.common.VALID_CONTENT_TYPES`. It and `VALID_TICKET_LINK_NAMES` are derived from the corresponding `Literal` types,
+  so the type hints and the checks at runtime can not differ.
+- REST2 `search()` supports the TicketSQL operators `__gte` (>=), `__lte` (<=), `__startswith`, `__notstartswith`,
+  `__endswith`, `__notendswith`, `__is` and `__isnot` (the latter two with the value `None`, e.g. `Resolved__isnot=None`).
+- REST2 clients can be closed with `close()` (sync) / `aclose()` (async) or used as (async) context manager to close
+  the underlying HTTP connections.
+
 ## [v3.8.0], 2026-07-20
 ### Changes
 - Switch from the seemingly unmaintained httpx library to the actively maintained fork, httpx2.

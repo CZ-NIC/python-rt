@@ -22,7 +22,6 @@ classifiers = [
 requires-python = ">= 3.10"
 dependencies = [
   "httpx2~=2.7",
-  "requests~=2.32",
 ]
 dynamic = ["version"]
 
@@ -44,10 +43,10 @@ docs = [
 dev = [
   "mypy",
   "ruff",
-  "types-requests",
   "codespell",
   "bandit",
   "prek>=0.3.2",
+  "unasyncd~=0.10",
 ]
 test = [
   "pytest~=9.1",
@@ -68,19 +67,39 @@ exclude = []
 [tool.hatch.version]
 source = "vcs"
 
+[tool.unasyncd]
+# rt/rest2.py and the sync REST2 tests are generated from the async ones, do not edit them manually.
+# Run `uv run unasyncd` to regenerate them; it exits with 1 if a generated file was out of date.
+files = { "rt/rest2_async.py" = "rt/rest2.py", "tests/test_basic_async.py" = "tests/test_basic.py", "tests/test_tickets_async.py" = "tests/test_tickets.py", "tests/test_rest2_fixes_async.py" = "tests/test_rest2_fixes.py" }
+add_replacements = { "AsyncRt" = "Rt", "httpx2.AsyncClient" = "httpx2.Client", "aclose" = "close" }
+add_editors_note = true
+transform_docstrings = true
+# removes the imports of the async modules which are left in the generated tests
+ruff_fix = true
+ruff_format = true
+# Always regenerate: without it, unasyncd only detects changes of the source file, not manual edits of rt/rest2.py.
+force_regen = true
+cache = false
+
+[tool.unasyncd.per_file_add_replacements."tests/test_basic_async.py"]
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
+[tool.unasyncd.per_file_add_replacements."tests/test_tickets_async.py"]
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
+[tool.unasyncd.per_file_add_replacements."tests/test_rest2_fixes_async.py"]
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
 [tool.mypy]
+strict = true
 show_error_codes = true
 show_error_context = true
 show_column_numbers = true
 ignore_missing_imports = true
-disallow_incomplete_defs = true
-disallow_untyped_defs = true
-disallow_untyped_calls = false
 warn_no_return = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-strict_optional = true
-check_untyped_defs = false
 
 files = [
   "rt/**/*.py"
@@ -190,6 +209,13 @@ ignore = [
 "rt/rest1.py" = [
   "N803", # Argument name should be lowercase
 ]
+"rt/rest2.py" = [
+  "UP028", # yield-in-for-loop; generated from rt/rest2_async.py where `yield from` is not available
+]
+# generated from the corresponding *_async.py files, where `[item async for item in ...]` can not be replaced by list()
+"tests/test_basic.py" = ["C416"]
+"tests/test_tickets.py" = ["C416"]
+"tests/test_rest2_fixes.py" = ["C416"]
 
 [tool.ruff.format]
 quote-style = "single"

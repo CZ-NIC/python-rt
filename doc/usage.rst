@@ -6,15 +6,37 @@ REST API version 2
 
 Creating a Connection
 `````````````````````
-::
+All arguments of the constructor must be passed by keyword::
 
     import rt.rest2
     import httpx2
 
     api_url = 'http://localhost:8080/REST/2.0/'
-    username = 'root'
-    password = 'password'
-    c = rt.rest2.Rt(url=baseurl, http_auth=httpx2.BasicAuth('root', 'password'))
+    c = rt.rest2.Rt(url=api_url, http_auth=httpx2.BasicAuth('root', 'password'))
+
+Instead of ``http_auth``, an authentication token created in RT can be used with ``token='...'``.
+Further optional arguments are ``proxy``, ``verify_cert`` (``False`` or the path to a CA bundle file),
+``http_timeout`` (in seconds, default 20, ``None`` for no timeout) and ``per_page`` (number of items
+requested per page for results which are split into pages by RT, at most 100, which is the default).
+
+The client keeps its HTTP connections open for further requests. Close it when it is not needed anymore,
+or use it as context manager, which closes it automatically::
+
+    with rt.rest2.Rt(url=api_url, http_auth=httpx2.BasicAuth('root', 'password')) as c:
+        ticket = c.get_ticket(1)
+
+    # or
+    c.close()
+
+To configure the HTTP connection in other ways (e.g. retries, HTTP/2, event hooks or a custom transport),
+pass your own ``httpx2.Client``. It is then used as it is, so ``proxy``, ``verify_cert``, ``http_auth``,
+``token`` and ``http_timeout`` can not be passed as well, and it is not closed by ``close()``::
+
+    http_client = httpx2.Client(
+        auth=httpx2.BasicAuth('root', 'password'),
+        transport=httpx2.HTTPTransport(retries=3),
+    )
+    c = rt.rest2.Rt(url=api_url, client=http_client)
 
 
 Ticket Operations
@@ -172,9 +194,9 @@ Editing a ticket::
                   )
 
 
-Searching for tickets with status *NEW* in the *General* queue::
+Searching for tickets with status *new* in the *General* queue::
 
-    c.search(Queue='SOC', raw_query='''Status = 'NEW' ''', Format='i')
+    list(c.search(queue='General', Status='new'))
 
 gives:
 
@@ -229,15 +251,18 @@ Merge ticket #1 into #2::
 
 Comment on a ticket and add an attachment::
 
-    attachments = []
     with open('README.rst', 'rb') as fhdl:
-        attachments.append(rt.rest2.Attachment('README.rst', 'test/plain', fhdl.read()))
-    print(json.dumps(c.comment(1, 'test', attachments=attachments), indent=4))
+        attachment = rt.rest2.Attachment('README.rst', 'text/plain', fhdl.read())
+    c.comment(1, 'test', attachments=[attachment])
+
+``reply()`` and ``comment()`` accept the content types ``text/plain`` (default) and ``text/html``::
+
+    c.reply(1, content='<p>test</p>', content_type='text/html')
 
 
 Get attachments for a ticket::
 
-    c.get_attachments(1)
+    list(c.get_attachments(1))
 
 returns:
 
@@ -248,7 +273,7 @@ returns:
             "type": "attachment",
             "_url": "http://localhost:8080/REST/2.0/attachment/34",
             "Filename": "README.rst",
-            "ContentType": "test/plain",
+            "ContentType": "text/plain",
             "id": "34",
             "ContentLength": "3578"
         }
@@ -257,3 +282,112 @@ returns:
 Fetch an attachment by its ID::
 
     c.get_attachment(34)
+
+
+Searching Tickets
+`````````````````
+``search()`` returns an iterator over the matching tickets; RT returns the results in pages, which are requested
+as needed while iterating. Conditions are passed as keyword arguments, which are combined with ``AND``::
+
+    for ticket in c.search(queue='General', Status='open', Owner='Nobody'):
+        print(ticket['id'], ticket['Subject'])
+
+Custom fields are searched with the prefix ``CF_``, e.g. ``CF_Severity='High'``, or ``**{'CF_My Field': 'value'}``
+for names which are not valid Python identifiers.
+
+Other operators than ``=`` are used by appending them to the field name, e.g. ``Subject__like='coffee'``:
+
+======================  ==============================
+Suffix                  TicketSQL operator
+======================  ==============================
+``__exact`` (default)   ``=``
+``__notexact``          ``!=``
+``__gt``, ``__gte``     ``>``, ``>=``
+``__lt``, ``__lte``     ``<``, ``<=``
+``__like``              ``LIKE``
+``__notlike``           ``NOT LIKE``
+``__startswith``        ``STARTSWITH``
+``__notstartswith``     ``NOT STARTSWITH``
+``__endswith``          ``ENDSWITH``
+``__notendswith``       ``NOT ENDSWITH``
+``__is``                ``IS`` (only with ``None``)
+``__isnot``             ``IS NOT`` (only with ``None``)
+======================  ==============================
+
+For example, all open tickets with a priority of at least 50 which are not resolved::
+
+    c.search(queue='General', Status='open', Priority__gte=50, Resolved__is=None)
+
+All values are quoted, so they can not change the meaning of the query. A complete TicketSQL query can be passed
+with ``raw_query`` instead; it is passed to RT as is, so it must never contain untrusted input::
+
+    c.search(queue='General', raw_query="Status = 'new' OR Status = 'open'")
+
+The fields returned for each ticket are selected with ``query_format``: ``'l'`` (default, many fields),
+``'s'`` (ID and subject), ``'i'`` (only the ID), or a list of fields::
+
+    c.search(queue='General', query_format=['Subject', 'Status'])
+
+Tickets updated recently::
+
+    import datetime
+
+    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
+    for ticket in c.last_updated(since, queue='General'):
+        print(ticket['id'])
+
+A ``datetime`` with timezone is an exact point in time. Dates, naive datetimes and strings like ``'2024-01-31'``
+or ``'2024-01-31 12:00:00'`` are interpreted by RT in the timezone of the RT user.
+
+
+Error Handling
+``````````````
+All exceptions raised by the library are subclasses of :py:exc:`rt.exceptions.RtError`, e.g.:
+
+* :py:exc:`~rt.exceptions.NotFoundError`: the ticket, user, queue etc. does not exist.
+* :py:exc:`~rt.exceptions.AuthorizationError`: the credentials are invalid.
+* :py:exc:`~rt.exceptions.BadRequestError`: RT rejected the request.
+* :py:exc:`~rt.exceptions.InvalidUseError`: invalid arguments, e.g. an unsupported search operator.
+* :py:exc:`~rt.exceptions.UnexpectedResponseError`: the response is not as expected, e.g. an unexpected
+  status code or an HTML page returned by a proxy instead of RT.
+* :py:exc:`~rt.exceptions.RtConnectionError`: RT can not be reached. It is also a builtin ``ConnectionError``.
+
+Invalid arguments are additionally reported with ``ValueError``, e.g. for an unsupported ``content_type``.
+
+::
+
+    import rt.exceptions
+
+    try:
+        c.get_ticket(1)
+    except rt.exceptions.NotFoundError:
+        print('No such ticket')
+
+
+Async Usage
+```````````
+``rt.rest2_async.AsyncRt`` provides the same methods as ``rt.rest2.Rt`` as coroutines. Methods returning
+multiple results are async iterators::
+
+    import rt.rest2_async
+    import httpx2
+
+    async with rt.rest2_async.AsyncRt(url=api_url, http_auth=httpx2.BasicAuth('root', 'password')) as c:
+        ticket = await c.get_ticket(1)
+        async for ticket in c.search(queue='General', Status='open'):
+            print(ticket['id'])
+
+An own ``httpx2.AsyncClient`` can be passed with ``client``, and the client is closed with ``await c.aclose()``.
+
+
+REST API version 1
+------------------
+All arguments of the constructor must be passed by keyword::
+
+    import rt.rest1
+
+    c = rt.rest1.Rt(url='https://rt.example.com/REST/1.0/', default_login='root', default_password='password')
+    c.login()
+    ticket = c.get_ticket(1)
+    c.reply(1, text='test', cc='someone@example.com')
+    c.logout()

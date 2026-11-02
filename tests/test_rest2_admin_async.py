@@ -13,11 +13,11 @@ import httpx2
 import pytest
 
 import rt.exceptions
-from rt.common import Attachment, RightsObjectType
+from rt.common import Attachment, JSONSearchParams, RightsObjectType
 from rt.rest2_async import AsyncRt
 
 from . import no_type_checks, random_string
-from .conftest import RT_PASSWORD, RT_URL, RT_USER
+from .conftest import RT_CUSTOM_ROLE, RT_PASSWORD, RT_URL, RT_USER, requires_rt_setup
 
 T = typing.TypeVar('T')
 
@@ -677,3 +677,159 @@ async def test_delete_asset_refused(message: str, expected: type[rt.exceptions.R
     async with _mock_client(lambda request: httpx2.Response(200, json=[message])) as tracker:
         with pytest.raises(expected, match=message):
             await tracker.delete_asset(1)
+
+
+# --- queues and custom roles ---------------------------------------------------------------------------------------
+
+
+async def test_search_queues(async_rt_connection: AsyncRt):
+    name, queue_id = await _create_queue(async_rt_connection)
+    await async_rt_connection.edit_queue(queue_id, Description='searched')
+
+    found = await _collect(async_rt_connection.search_queues(search_params=[{'field': 'Name', 'value': name}]))
+    assert [(int(item['id']), item['Name'], item['Description'], item['Lifecycle']) for item in found] == [(queue_id, name, 'searched', 'default')]
+
+    all_queues = [int(item['id']) async for item in async_rt_connection.search_queues()]
+    assert queue_id in all_queues
+    assert 1 in all_queues
+
+    # several conditions on the same field are combined with AND for queues, unless OR is requested
+    conditions: list[dict[str, typing.Any]] = [{'field': 'Name', 'value': name}, {'field': 'Name', 'value': 'General'}]
+    assert await _collect(async_rt_connection.search_queues(search_params=conditions)) == []
+    conditions[1]['entry_aggregator'] = 'OR'
+    assert sorted([int(item['id']) async for item in async_rt_connection.search_queues(search_params=conditions)]) == sorted([1, queue_id])
+
+
+async def test_search_queues_disabled(async_rt_connection: AsyncRt):
+    name, queue_id = await _create_queue(async_rt_connection)
+    await async_rt_connection.delete_queue(queue_id)
+    condition = [{'field': 'Name', 'value': name}]
+
+    assert await _collect(async_rt_connection.search_queues(search_params=condition)) == []
+    assert [int(item['id']) async for item in async_rt_connection.search_queues(search_params=condition, include_disabled=True)] == [queue_id]
+
+
+@requires_rt_setup
+async def test_custom_roles(async_rt_connection: AsyncRt):
+    found = await _collect(async_rt_connection.search_custom_roles(search_params=[{'field': 'Name', 'value': RT_CUSTOM_ROLE}]))
+    assert [(item['Name'], item['MaxValues'], item['LookupType']) for item in found] == [(RT_CUSTOM_ROLE, '1', 'RT::Queue-RT::Ticket')]
+
+    role_id = found[0]['id']
+    assert role_id in [item['id'] async for item in async_rt_connection.search_custom_roles()]
+
+    role = await async_rt_connection.get_custom_role(role_id)
+    assert (role['Name'], role['Disabled']) == (RT_CUSTOM_ROLE, '0')
+
+
+async def test_custom_role_not_found(async_rt_connection: AsyncRt):
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.get_custom_role(999999)
+
+
+# --- classes and articles ------------------------------------------------------------------------------------------
+
+
+async def _create_class(connection: AsyncRt) -> tuple[str, int]:
+    """Create a class with a random name and return its name and ID."""
+    name = f'class-{random_string()}'
+    return name, await connection.create_class(name, Description='python-rt test')
+
+
+async def test_class(async_rt_connection: AsyncRt):
+    name, class_id = await _create_class(async_rt_connection)
+
+    article_class = await async_rt_connection.get_class(name)
+    assert (int(article_class['id']), article_class['Description']) == (class_id, 'python-rt test')
+    # RT applies the custom field for the text of articles to new classes
+    assert 'Content' in [field['name'] for field in article_class['ArticleCustomFields']]
+
+    found = await _collect(async_rt_connection.search_classes(search_params=[{'field': 'Name', 'value': name}]))
+    assert [(int(item['id']), item['Name'], item['Description']) for item in found] == [(class_id, name, 'python-rt test')]
+    assert class_id in [int(item['id']) async for item in async_rt_connection.search_classes()]
+    assert class_id in [int(item['id']) async for item in async_rt_connection.get_all_classes()]
+
+    messages = await async_rt_connection.edit_class(class_id, Description='edited')
+    assert len(messages) == 1
+    assert 'Description' in messages[0]
+
+    with pytest.raises(rt.exceptions.BadRequestError):
+        await async_rt_connection.create_class(name)
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.get_class(999999)
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.edit_class(999999, Description='x')
+
+
+async def test_delete_class(async_rt_connection: AsyncRt):
+    name, class_id = await _create_class(async_rt_connection)
+    condition = [{'field': 'Name', 'value': name}]
+
+    await async_rt_connection.delete_class(name)
+
+    assert (await async_rt_connection.get_class(class_id))['Disabled'] == '1'
+    assert class_id not in [int(item['id']) async for item in async_rt_connection.get_all_classes()]
+    assert class_id in [int(item['id']) async for item in async_rt_connection.get_all_classes(include_disabled=True)]
+    assert await _collect(async_rt_connection.search_classes(search_params=condition)) == []
+    assert [int(item['id']) async for item in async_rt_connection.search_classes(search_params=condition, include_disabled=True)] == [class_id]
+    # disabling a class again is no error
+    await async_rt_connection.delete_class(class_id)
+
+
+async def test_article(async_rt_connection: AsyncRt):
+    class_name, class_id = await _create_class(async_rt_connection)
+    name = f'article-{random_string()}'
+
+    article_id = await async_rt_connection.create_article(name, class_name, Summary='summary', CustomFields={'Content': 'Text of the article'})
+
+    article = await async_rt_connection.get_article(article_id)
+    assert (article['Name'], article['Summary'], int(article['Class']['id'])) == (name, 'summary', class_id)
+    assert [field['values'] for field in article['CustomFields'] if field['name'] == 'Content'] == [['Text of the article']]
+
+    found = await _collect(async_rt_connection.search_articles(search_params=[{'field': 'Class', 'value': class_id}]))
+    assert [(int(item['id']), item['Name'], item['Summary'], int(item['Class']['id'])) for item in found] == [(article_id, name, 'summary', class_id)]
+    assert article_id in [int(item['id']) async for item in async_rt_connection.search_articles()]
+
+    messages = await async_rt_connection.edit_article(article_id, Summary='changed', CustomFields={'Content': 'New text'})
+    assert len(messages) == 2
+    assert 'Summary' in messages[0]
+    article = await async_rt_connection.get_article(article_id)
+    assert [field['values'] for field in article['CustomFields'] if field['name'] == 'Content'] == [['New text']]
+
+    history = [item['Type'] async for item in async_rt_connection.get_article_history(article_id)]
+    assert history[0] == 'Create'
+    assert len(history) >= 3
+    assert await _collect(async_rt_connection.get_article_history(999999)) == []
+
+
+async def test_article_errors(async_rt_connection: AsyncRt):
+    class_name, _ = await _create_class(async_rt_connection)
+    name = f'article-{random_string()}'
+    await async_rt_connection.create_article(name, class_name)
+
+    # names are unique per class
+    with pytest.raises(rt.exceptions.BadRequestError):
+        await async_rt_connection.create_article(name, class_name)
+    with pytest.raises(rt.exceptions.NotAllowedError):
+        await async_rt_connection.create_article(name, f'missing-{random_string()}')
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.get_article(999999)
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.edit_article(999999, Summary='x')
+
+
+async def test_delete_article(async_rt_connection: AsyncRt):
+    class_name, class_id = await _create_class(async_rt_connection)
+    article_id = await async_rt_connection.create_article(f'article-{random_string()}', class_name)
+    condition: JSONSearchParams = [{'field': 'Class', 'value': class_id}]
+
+    await async_rt_connection.delete_article(article_id)
+
+    assert (await async_rt_connection.get_article(article_id))['Disabled'] == '1'
+    assert await _collect(async_rt_connection.search_articles(search_params=condition)) == []
+    assert [int(item['id']) async for item in async_rt_connection.search_articles(search_params=condition, include_disabled=True)] == [article_id]
+
+    # RT fails with HTTP status 500 for an article which is already deleted
+    with pytest.raises(rt.exceptions.UnexpectedResponseError):
+        await async_rt_connection.delete_article(article_id)
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.delete_article(999999)

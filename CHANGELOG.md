@@ -113,6 +113,9 @@ Python 3.11 or newer is required.
 - The `base_url` attribute was removed; use `tracker.url.removesuffix('REST/2.0/')` if needed.
 
 ### Changes
+- REST2 `search()` (and `last_updated()` and `new_correspondence()`, which use it) sends the TicketSQL query in the
+  body of a POST request instead of the URL, so long queries are not limited by the maximum length of URLs of web
+  servers and proxies, and search terms do not appear in their access logs. The results are the same.
 - The REST2 client targets the latest version of RT (6.0) and is tested with it, instead of RT 5.0.2. The
   documentation refers to the [REST2 documentation of RT 6.0.4](https://docs.bestpractical.com/rt/6.0.4/RT/REST2.html).
 - **Breaking:** Remove support for Python 3.10, which reached its end of life; Python >= 3.11 is required.
@@ -239,6 +242,20 @@ Python 3.11 or newer is required.
 - The docstrings of all REST2 methods state the minimum RT version they require, e.g. `take()`, `untake()`,
   `steal()` and `get_attachments()` require RT 5.0.1.
 - REST2 `get_system_info()` returns the RT version and plugins.
+- REST2 `reply()` and `comment()` accept `subject`, `time_taken`, `status`, `custom_fields`, `custom_roles` and
+  `txn_custom_fields`, to change the ticket in the same request (`status` and `custom_roles` require RT 5.0.2).
+- REST2 catalogs: `get_all_catalogs()`, `search_catalogs()`, `create_catalog()`, `edit_catalog()` and
+  `delete_catalog()`.
+- REST2 `search_assets()` accepts an AssetSQL query as `raw_query` (RT 5.0.2 or newer).
+- REST2 `get_ticket_messages()` returns the creation, replies and comments of a ticket with their text and author in
+  one request per 100 messages, instead of `get_ticket_history()` followed by `get_transaction()` for each entry
+  (both remain available).
+- REST2 `search_transactions()` searches transactions, also across tickets, with conditions or a TransactionSQL
+  query (`raw_query`, RT 5.0.2 or newer).
+- REST2 `delete_asset()` marks an asset as deleted by setting its status (the REST2 endpoint for deleting assets
+  always fails, as RT does not delete assets).
+- REST2 `create_custom_field()` raises `InvalidUseError` if `Queue` is passed for a custom field which is not a ticket
+  custom field, as RT would silently create a ticket custom field instead.
 - Add `rt.exceptions.ConflictError`, which REST2 raises for HTTP status 409 (e.g. when granting a right which is
   already granted) with the message of RT. It is a subclass of `UnexpectedResponseError`, which was raised before,
   so existing code catching it keeps working.

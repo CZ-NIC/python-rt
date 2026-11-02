@@ -7,6 +7,7 @@ The sync tests (test_rest2_admin.py) are generated from the async tests (test_re
 
 import collections.abc
 import typing
+import urllib.parse
 
 import httpx2
 import pytest
@@ -546,3 +547,133 @@ async def test_rights_invalid_use(object_type: typing.Any, object_id: int | str 
             if principal:
                 with pytest.raises(rt.exceptions.InvalidUseError):
                     await _collect(tracker.get_rights(object_type, object_id, **principal))
+
+
+async def test_create_custom_field_queue_for_other_lookup_type():
+    # RT would silently create a ticket custom field instead
+    async with _mock_client(_no_request) as tracker:
+        with pytest.raises(rt.exceptions.InvalidUseError, match='Queue'):
+            await tracker.create_custom_field('Notes', 'Freeform', 'RT::Queue-RT::Ticket-RT::Transaction', Queue='General')
+
+
+# --- catalogs and assets -------------------------------------------------------------------------------------------
+
+
+async def _create_catalog(connection: AsyncRt) -> tuple[str, int]:
+    """Create a catalog with a random name and return its name and ID."""
+    name = f'catalog-{random_string()}'
+    return name, await connection.create_catalog(name, Description='python-rt test')
+
+
+async def test_catalog(async_rt_connection: AsyncRt):
+    name, catalog_id = await _create_catalog(async_rt_connection)
+
+    catalog = await async_rt_connection.get_catalog(name)
+    assert (int(catalog['id']), catalog['Description'], catalog['Lifecycle']) == (catalog_id, 'python-rt test', 'assets')
+
+    found = await _collect(async_rt_connection.search_catalogs(search_params=[{'field': 'Name', 'value': name}]))
+    assert [(int(item['id']), item['Name'], item['Description']) for item in found] == [(catalog_id, name, 'python-rt test')]
+    assert catalog_id in [int(item['id']) async for item in async_rt_connection.search_catalogs()]
+    all_catalogs = {int(item['id']): item async for item in async_rt_connection.get_all_catalogs()}
+    assert all_catalogs[catalog_id]['Name'] == name
+
+    messages = await async_rt_connection.edit_catalog(name, Description='edited')
+    assert len(messages) == 1
+    assert 'Description' in messages[0]
+    assert (await async_rt_connection.get_catalog(catalog_id))['Description'] == 'edited'
+
+
+async def test_catalog_errors(async_rt_connection: AsyncRt):
+    name, _ = await _create_catalog(async_rt_connection)
+
+    with pytest.raises(rt.exceptions.BadRequestError, match='unique'):
+        await async_rt_connection.create_catalog(name)
+    with pytest.raises(rt.exceptions.BadRequestError, match='lifecycle'):
+        await async_rt_connection.create_catalog(f'catalog-{random_string()}', Lifecycle='invalid')
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.edit_catalog(999999, Description='x')
+
+
+async def test_delete_catalog(async_rt_connection: AsyncRt):
+    name, catalog_id = await _create_catalog(async_rt_connection)
+    condition = [{'field': 'Name', 'value': name}]
+
+    await async_rt_connection.delete_catalog(catalog_id)
+
+    assert (await async_rt_connection.get_catalog(catalog_id))['Disabled'] == '1'
+    assert catalog_id not in [int(item['id']) async for item in async_rt_connection.get_all_catalogs()]
+    assert catalog_id in [int(item['id']) async for item in async_rt_connection.get_all_catalogs(include_disabled=True)]
+    assert await _collect(async_rt_connection.search_catalogs(search_params=condition)) == []
+    assert [int(item['id']) async for item in async_rt_connection.search_catalogs(search_params=condition, include_disabled=True)] == [catalog_id]
+
+
+async def test_search_assets_raw_query(async_rt_connection: AsyncRt):
+    catalog_name, catalog_id = await _create_catalog(async_rt_connection)
+    asset_name = f'Grüße {random_string()}'
+    asset_id = await async_rt_connection.create_asset(asset_name, catalog_id)
+    await async_rt_connection.create_asset(f'other {random_string()}', catalog_id)
+
+    query = f"Catalog = '{catalog_name}' AND Name = '{asset_name}'"
+    found = [(int(asset['id']), asset['Name']) async for asset in async_rt_connection.search_assets(raw_query=query, fields='Name')]
+
+    assert found == [(asset_id, asset_name)]
+
+
+async def test_search_assets_raw_query_request():
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(200, json={'page': 1, 'per_page': 100, 'pages': 0, 'total': 0, 'count': 0, 'items': []})
+
+    async with _mock_client(handler) as tracker:
+        await _collect(tracker.search_assets(raw_query="Status = 'new'"))
+
+    (request,) = requests
+    assert request.method == 'POST'
+    assert urllib.parse.parse_qs(request.content.decode()) == {'query': ["Status = 'new'"]}
+    assert 'query' not in request.url.params
+
+
+@pytest.mark.parametrize(
+    'arguments',
+    [
+        {'raw_query': ''},
+        {'raw_query': '  '},
+        {'raw_query': "Status = 'new'", 'catalog_id': 1},
+        {'raw_query': "Status = 'new'", 'search_params': []},
+    ],
+)
+async def test_search_assets_raw_query_invalid_use(arguments: dict[str, typing.Any]):
+    async with _mock_client(_no_request) as tracker:
+        with pytest.raises(rt.exceptions.InvalidUseError):
+            await _collect(tracker.search_assets(**arguments))
+
+
+async def test_delete_asset(async_rt_connection: AsyncRt):
+    _, catalog_id = await _create_catalog(async_rt_connection)
+    asset_name = f'asset-{random_string()}'
+    asset_id = await async_rt_connection.create_asset(asset_name, catalog_id)
+
+    await async_rt_connection.delete_asset(asset_id)
+
+    assert (await async_rt_connection.get_asset(asset_id))['Status'] == 'deleted'
+    assert await _collect(async_rt_connection.search_assets(catalog_id=catalog_id, search_params=[{'field': 'Name', 'value': asset_name}])) == []
+    # deleting an asset again is no error
+    await async_rt_connection.delete_asset(asset_id)
+
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.delete_asset(999999)
+
+
+@pytest.mark.parametrize(
+    ('message', 'expected'),
+    [
+        ("Status 'deleted' isn't a valid status for this asset.", rt.exceptions.InvalidUseError),
+        ('Asset 1: Permission Denied', rt.exceptions.NotAllowedError),
+    ],
+)
+async def test_delete_asset_refused(message: str, expected: type[rt.exceptions.RtError]):
+    async with _mock_client(lambda request: httpx2.Response(200, json=[message])) as tracker:
+        with pytest.raises(expected, match=message):
+            await tracker.delete_asset(1)

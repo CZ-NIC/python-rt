@@ -9,6 +9,7 @@ The sync tests (test_rest2_admin.py) are generated from the async tests (test_re
 
 import collections.abc
 import typing
+import urllib.parse
 
 import httpx2
 import pytest
@@ -548,3 +549,133 @@ def test_rights_invalid_use(object_type: typing.Any, object_id: int | str | None
             if principal:
                 with pytest.raises(rt.exceptions.InvalidUseError):
                     _collect(tracker.get_rights(object_type, object_id, **principal))
+
+
+def test_create_custom_field_queue_for_other_lookup_type():
+    # RT would silently create a ticket custom field instead
+    with _mock_client(_no_request) as tracker:
+        with pytest.raises(rt.exceptions.InvalidUseError, match='Queue'):
+            tracker.create_custom_field('Notes', 'Freeform', 'RT::Queue-RT::Ticket-RT::Transaction', Queue='General')
+
+
+# --- catalogs and assets -------------------------------------------------------------------------------------------
+
+
+def _create_catalog(connection: Rt) -> tuple[str, int]:
+    """Create a catalog with a random name and return its name and ID."""
+    name = f'catalog-{random_string()}'
+    return name, connection.create_catalog(name, Description='python-rt test')
+
+
+def test_catalog(rt_connection: Rt):
+    name, catalog_id = _create_catalog(rt_connection)
+
+    catalog = rt_connection.get_catalog(name)
+    assert (int(catalog['id']), catalog['Description'], catalog['Lifecycle']) == (catalog_id, 'python-rt test', 'assets')
+
+    found = _collect(rt_connection.search_catalogs(search_params=[{'field': 'Name', 'value': name}]))
+    assert [(int(item['id']), item['Name'], item['Description']) for item in found] == [(catalog_id, name, 'python-rt test')]
+    assert catalog_id in [int(item['id']) for item in rt_connection.search_catalogs()]
+    all_catalogs = {int(item['id']): item for item in rt_connection.get_all_catalogs()}
+    assert all_catalogs[catalog_id]['Name'] == name
+
+    messages = rt_connection.edit_catalog(name, Description='edited')
+    assert len(messages) == 1
+    assert 'Description' in messages[0]
+    assert (rt_connection.get_catalog(catalog_id))['Description'] == 'edited'
+
+
+def test_catalog_errors(rt_connection: Rt):
+    name, _ = _create_catalog(rt_connection)
+
+    with pytest.raises(rt.exceptions.BadRequestError, match='unique'):
+        rt_connection.create_catalog(name)
+    with pytest.raises(rt.exceptions.BadRequestError, match='lifecycle'):
+        rt_connection.create_catalog(f'catalog-{random_string()}', Lifecycle='invalid')
+    with pytest.raises(rt.exceptions.NotFoundError):
+        rt_connection.edit_catalog(999999, Description='x')
+
+
+def test_delete_catalog(rt_connection: Rt):
+    name, catalog_id = _create_catalog(rt_connection)
+    condition = [{'field': 'Name', 'value': name}]
+
+    rt_connection.delete_catalog(catalog_id)
+
+    assert (rt_connection.get_catalog(catalog_id))['Disabled'] == '1'
+    assert catalog_id not in [int(item['id']) for item in rt_connection.get_all_catalogs()]
+    assert catalog_id in [int(item['id']) for item in rt_connection.get_all_catalogs(include_disabled=True)]
+    assert _collect(rt_connection.search_catalogs(search_params=condition)) == []
+    assert [int(item['id']) for item in rt_connection.search_catalogs(search_params=condition, include_disabled=True)] == [catalog_id]
+
+
+def test_search_assets_raw_query(rt_connection: Rt):
+    catalog_name, catalog_id = _create_catalog(rt_connection)
+    asset_name = f'Grüße {random_string()}'
+    asset_id = rt_connection.create_asset(asset_name, catalog_id)
+    rt_connection.create_asset(f'other {random_string()}', catalog_id)
+
+    query = f"Catalog = '{catalog_name}' AND Name = '{asset_name}'"
+    found = [(int(asset['id']), asset['Name']) for asset in rt_connection.search_assets(raw_query=query, fields='Name')]
+
+    assert found == [(asset_id, asset_name)]
+
+
+def test_search_assets_raw_query_request():
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(200, json={'page': 1, 'per_page': 100, 'pages': 0, 'total': 0, 'count': 0, 'items': []})
+
+    with _mock_client(handler) as tracker:
+        _collect(tracker.search_assets(raw_query="Status = 'new'"))
+
+    (request,) = requests
+    assert request.method == 'POST'
+    assert urllib.parse.parse_qs(request.content.decode()) == {'query': ["Status = 'new'"]}
+    assert 'query' not in request.url.params
+
+
+@pytest.mark.parametrize(
+    'arguments',
+    [
+        {'raw_query': ''},
+        {'raw_query': '  '},
+        {'raw_query': "Status = 'new'", 'catalog_id': 1},
+        {'raw_query': "Status = 'new'", 'search_params': []},
+    ],
+)
+def test_search_assets_raw_query_invalid_use(arguments: dict[str, typing.Any]):
+    with _mock_client(_no_request) as tracker:
+        with pytest.raises(rt.exceptions.InvalidUseError):
+            _collect(tracker.search_assets(**arguments))
+
+
+def test_delete_asset(rt_connection: Rt):
+    _, catalog_id = _create_catalog(rt_connection)
+    asset_name = f'asset-{random_string()}'
+    asset_id = rt_connection.create_asset(asset_name, catalog_id)
+
+    rt_connection.delete_asset(asset_id)
+
+    assert (rt_connection.get_asset(asset_id))['Status'] == 'deleted'
+    assert _collect(rt_connection.search_assets(catalog_id=catalog_id, search_params=[{'field': 'Name', 'value': asset_name}])) == []
+    # deleting an asset again is no error
+    rt_connection.delete_asset(asset_id)
+
+    with pytest.raises(rt.exceptions.NotFoundError):
+        rt_connection.delete_asset(999999)
+
+
+@pytest.mark.parametrize(
+    ('message', 'expected'),
+    [
+        ("Status 'deleted' isn't a valid status for this asset.", rt.exceptions.InvalidUseError),
+        ('Asset 1: Permission Denied', rt.exceptions.NotAllowedError),
+    ],
+)
+def test_delete_asset_refused(message: str, expected: type[rt.exceptions.RtError]):
+    with _mock_client(lambda request: httpx2.Response(200, json=[message])) as tracker:
+        with pytest.raises(expected, match=message):
+            tracker.delete_asset(1)

@@ -1,5 +1,6 @@
 # RT initial data for the tests which need more than a fresh RT, for the image ghcr.io/python-rt/request-tracker
-# (https://github.com/python-rt/docker-rt). REST2 can not apply custom fields to a queue, so it is done here.
+# (https://github.com/python-rt/docker-rt): a custom field and a custom role of the queue General (REST2 can not
+# create custom roles).
 #
 # Locally, mounted into the init directory of the container, it is inserted on the first start:
 #
@@ -22,6 +23,15 @@
         Type       => 'FreeformSingle',
         LookupType => 'RT::Queue-RT::Ticket',
         Queue      => ['General'],
+    },
+);
+
+# must match RT_CUSTOM_ROLE in tests/conftest.py; REST2 can not create custom roles
+@CustomRoles = (
+    {
+        Name      => 'python-rt Test Role',
+        MaxValues => 1,
+        ApplyTo   => 'General',
     },
 );
 

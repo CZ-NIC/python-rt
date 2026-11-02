@@ -15,6 +15,7 @@ import json
 import logging
 import pathlib
 import typing
+import urllib.parse
 
 import httpx2
 import pytest
@@ -53,6 +54,14 @@ def _page(page: int, items: list, pages: int | None, next_page: bool = False, pe
     if next_page:
         result['next_page'] = f'{RT_URL}tickets?page={page + 1}'
     return httpx2.Response(200, json=result)
+
+
+def _query(request: httpx2.Request) -> str:
+    """Return the query of a search, which is sent in the form encoded body of a POST request, not in the URL."""
+    assert request.method == 'POST'
+    assert 'query' not in request.url.params
+    (query,) = urllib.parse.parse_qs(request.content.decode(), keep_blank_values=True)['query']
+    return query
 
 
 def _no_request(request: httpx2.Request) -> httpx2.Response:
@@ -126,7 +135,7 @@ def test_search_query_string():
     orders = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        queries.append(request.url.params['query'])
+        queries.append(_query(request))
         orders.append((request.url.params.get('orderby'), request.url.params.get('order')))
         return _page(1, [], pages=0)
 
@@ -190,13 +199,48 @@ def test_search_operator_query_string():
     queries = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        queries.append(request.url.params['query'])
+        queries.append(_query(request))
         return _page(1, [], pages=0)
 
     client = _mock_client(handler)
     _collect(client.search(Priority__gte=5, Subject__notstartswith="a'b", Resolved__isnot=None, CF_my__field__exact='x'))
 
     assert queries == ["(Priority>='5') AND (Subject NOT STARTSWITH 'a\\'b') AND (Resolved IS NOT NULL) AND ('CF.{my__field}'='x')"]
+
+
+def test_search_parameters_in_url():
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return _page(1, [], pages=0)
+
+    _collect(_mock_client(handler).search(queue='General', order='-Created', fields=['Subject']))
+
+    # only the query is sent in the body, the other parameters are sent in the URL as before
+    (request,) = requests
+    assert _query(request) == "(Queue='General')"
+    assert dict(request.url.params) == {'orderby': 'Created', 'order': 'DESC', 'fields': 'Subject', 'page': '1', 'per_page': '100'}
+    assert request.headers['Content-Type'] == 'application/x-www-form-urlencoded'
+
+
+def test_search_non_ascii(rt_connection: Rt):
+    subject = f'Grüße ✓ {random_string()}'
+    ticket_id = rt_connection.create_ticket(queue=RT_QUEUE, subject=subject, content='Test')
+
+    found = [(int(ticket['id']), ticket['Subject']) for ticket in rt_connection.search(queue=RT_QUEUE, Subject=subject)]
+
+    assert found == [(ticket_id, subject)]
+
+
+def test_search_long_query(rt_connection: Rt):
+    ticket_id = rt_connection.create_ticket(queue=RT_QUEUE, subject='Long query', content='Test')
+    # a query of about 40 KB, which is longer than many web servers and proxies accept in a URL
+    raw_query = ' OR '.join(f"id = '{ticket_id + offset}'" for offset in range(3000))
+
+    found = [int(ticket['id']) for ticket in rt_connection.search(raw_query=raw_query, fields='i')]
+
+    assert ticket_id in found
 
 
 # --- URL paths ---------------------------------------------------------------------------------------------------
@@ -244,7 +288,7 @@ def test_last_updated_date_formats():
     queries = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        queries.append(request.url.params['query'])
+        queries.append(_query(request))
         return _page(1, [], pages=0)
 
     client = _mock_client(handler)

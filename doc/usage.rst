@@ -280,6 +280,26 @@ Comment on a ticket and add an attachment::
 
     c.reply(1, content='<p>test</p>', content_type='text/html')
 
+They can also set the subject of the message, record the time worked, and change the status, custom fields and
+custom roles of the ticket and the custom fields of the transaction in the same request::
+
+    c.reply(1, 'Fixed, please check.', time_taken=15, status='resolved', custom_fields={'Severity': 'Low'})
+
+RT sets these after adding the message and reports refused values only in the returned messages, e.g. an
+invalid status.
+
+The messages of a ticket (its creation, replies and comments) with their text and author, oldest first, in one
+request per 100 messages::
+
+    for message in c.get_ticket_messages(1):
+        print(message['Created'], message['Creator']['Name'], message['Type'], message['Content'])
+
+All transactions of a ticket, also e.g. status changes, are returned by ``get_ticket_history()``, a single
+transaction by ``get_transaction()``. Transactions are searched, also across tickets, with conditions or a
+TransactionSQL query (RT 5.0.2 or newer)::
+
+    c.search_transactions(raw_query="Type = 'Comment' AND Created > '2024-01-01'", fields=['Type', 'Content'])
+
 
 Get attachments for a ticket::
 
@@ -419,6 +439,23 @@ or globally, to a user (by name or ID) or a group (by ID)::
 Granting a right which is already granted raises :py:exc:`~rt.exceptions.ConflictError`.
 
 The version of RT and its plugins are returned by ``get_system_info()``.
+
+
+Assets and Catalogs
+```````````````````
+Catalogs are created, edited and disabled like queues::
+
+    catalog_id = c.create_catalog('Laptops', Description='Company laptops')
+    c.edit_catalog('Laptops', Description='All laptops')
+    for catalog in c.get_all_catalogs():
+        print(catalog['Name'])
+
+Assets are searched with conditions, or with an AssetSQL query (RT 5.0.2 or newer), which is passed to RT as is::
+
+    c.search_assets(raw_query="Catalog = 'Laptops' AND Status = 'in-use'")
+
+RT ignores an invalid AssetSQL query and then returns all assets. ``delete_asset()`` marks an asset as deleted
+by setting its status, as RT does not delete assets.
 
 
 Error Handling

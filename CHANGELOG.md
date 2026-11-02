@@ -225,6 +225,24 @@ Python 3.11 or newer is required.
   Conditions as keyword arguments continue to work and can be combined with it.
 - REST2 clients can be closed with `close()` (sync) / `aclose()` (async) or used as (async) context manager to close
   the underlying HTTP connections.
+- REST2 rights: `get_rights()`, `get_available_rights()`, `grant_right()` and `revoke_right()` on queues, groups,
+  classes, catalogs, custom fields and globally (RT 6.0.3 or newer).
+- REST2 users and groups: `search_users()`, `get_user_groups()`, `add_user_to_group()`, `remove_user_from_group()`,
+  `remove_user_from_all_groups()`, `search_groups()`, `get_group()`, `create_group()`, `edit_group()`,
+  `delete_group()`, `get_group_members()`, `add_group_member()`, `remove_group_member()` and
+  `remove_all_group_members()`.
+- REST2 custom fields: `search_custom_fields()`, `get_custom_field()`, `create_custom_field()`, `edit_custom_field()`,
+  `delete_custom_field()`, `get_custom_field_applies_to()`, `apply_custom_field()`, `unapply_custom_field()`
+  (the latter three RT 6.0.3 or newer), `get_custom_field_values()`, `get_custom_field_value()`,
+  `add_custom_field_value()`, `edit_custom_field_value()`, `delete_custom_field_value()` and
+  `get_custom_field_file()`.
+- The docstrings of the new REST2 methods state the minimum RT version they require.
+- REST2 `get_system_info()` returns the RT version and plugins.
+- Add `rt.exceptions.ConflictError`, which REST2 raises for HTTP status 409 (e.g. when granting a right which is
+  already granted) with the message of RT. It is a subclass of `UnexpectedResponseError`, which was raised before,
+  so existing code catching it keeps working.
+- Add `rt.common.RightsObjectType`, `rt.common.CustomFieldObjectType` and `rt.common.JSONSearchParams` for the new
+  REST2 methods.
 
 ## [v3.8.2], 2026-11-04
 ### Fixes

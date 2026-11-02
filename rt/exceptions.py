@@ -37,6 +37,14 @@ class UnexpectedResponseError(RtError):
     """Exception raised when unexpected HTTP code is received."""
 
 
+class ConflictError(UnexpectedResponseError):
+    """Exception raised when RT answers with HTTP status 409 (Conflict).
+
+    REST2 raises it e.g. when granting a right which is already granted. It is a subclass of
+    :py:exc:`UnexpectedResponseError`, which was raised for this status before.
+    """
+
+
 class UnexpectedMessageFormatError(RtError):
     """Exception raised when response has bad status code (not the HTTP code,
     but code in the first line of the body as 200 in `RT/4.0.7 200 Ok`)

@@ -25,12 +25,17 @@ from .common import (
     _USER_FIELDS,
     REGEX_PATTERNS,
     VALID_CONTENT_TYPES,
+    VALID_CUSTOM_FIELD_OBJECT_TYPES,
+    VALID_RIGHTS_OBJECT_TYPES,
     VALID_TICKET_LINK_NAMES,
     Attachment,
     ContentType,
+    CustomFieldObjectType,
     JSONInput,
+    JSONSearchParams,
     JSONValue,
     QueryParams,
+    RightsObjectType,
     SearchFormat,
     TicketLinkName,
     _build_ticket_query,
@@ -44,6 +49,7 @@ from .common import (
 from .exceptions import (
     AuthorizationError,
     BadRequestError,
+    ConflictError,
     InvalidUseError,
     NotAllowedError,
     NotFoundError,
@@ -303,6 +309,8 @@ class Rt:
         :raises AuthorizationError: Credentials are invalid or missing.
         :raises NotAllowedError: The user is not allowed to execute the request (HTTP/403).
         :raises NotFoundError: Resource was not found.
+        :raises ConflictError: The request conflicts with the state of the resource (HTTP/409), e.g. a right is
+                               already granted.
         :raises UnexpectedResponseError: Server returned an unexpected status code.
         """
         status_code = response.status_code
@@ -321,6 +329,9 @@ class Rt:
 
         if status_code == 404:
             raise NotFoundError('No such resource found.', status_code=status_code, response_message=text)
+
+        if status_code == 409:
+            raise ConflictError(cls._error_message(response, 'Conflict'), status_code=status_code, response_message=text)
 
         # 204 (No Content) is returned when deleting resources
         if status_code not in (200, 201, 204):
@@ -1147,6 +1158,289 @@ class Rt:
         """
         self._delete(_path('user', user_id))
 
+    def search_users(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        privileged: bool | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        include_disabled: bool = False,
+    ) -> collections.abc.Iterator[dict[str, typing.Any]]:
+        """Search users.
+
+        Example::
+
+            >>> tracker.search_users(search_params=[{'field': 'EmailAddress', 'operator': 'LIKE', 'value': '@example.com'}])
+
+        .. note:: Requires RT 5.0.0 or newer, *privileged* requires RT 5.0.8 or newer (or any RT 6.0).
+
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'Name', 'value': 'alice'}]``. All users if not specified.
+        :param privileged: ``True`` to search only privileged users, ``False`` only unprivileged users,
+                           ``None`` (default) all users.
+        :param fields: Fields returned for each user: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT. By default Name, RealName, EmailAddress and Disabled.
+        :param include_disabled: Set to True to also return disabled users.
+        :returns: Iterator of the found users.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        if privileged is None:
+            selector = 'users'
+        else:
+            selector = _path('users', 'privileged' if privileged else 'unprivileged')
+
+        params: dict[str, str | int] = {
+            **_fields_params(fields, default_fields='Name,RealName,EmailAddress,Disabled'),
+            'find_disabled_rows': int(include_disabled),
+        }
+
+        for item in self._paged_request(selector, json_data=list(search_params or []), params=params):
+            yield item
+
+    def get_user_groups(self, user_id: str | int) -> collections.abc.Iterator[dict[str, typing.Any]]:
+        """Get the groups which a user is a direct member of.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param user_id: Identification of the user by name (str) or ID (int).
+        :returns: Iterator of the groups, each a dictionary with the keys id, type and _url.
+        :raises NotFoundError: If the user does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        for item in self._paged_request(_path('user', user_id, 'groups')):
+            yield item
+
+    def add_user_to_group(self, user_id: str | int, group_id: str | int) -> list[str]:
+        """Add a user to a group.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param user_id: Identification of the user by name (str) or ID (int).
+        :param group_id: ID of the group (RT does not support group names here).
+        :returns: Status messages of RT, e.g. ``['Member added: alice']``.
+        :raises NotFoundError: If the user or the group does not exist.
+        :raises InvalidUseError: If RT refused to add the user, e.g. if the user is already a member of the group.
+        :raises NotAllowedError: If the user is not allowed to change the members of the group.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = self._send('PUT', _path('user', user_id, 'groups'), json_data=[group_id])
+        result = self._decode_json(response)
+
+        # RT returns a status (1 for success, 0 for failure) and a message for each group
+        if not isinstance(result, list) or len(result) != 2:
+            raise UnexpectedResponseError(str(result), status_code=response.status_code, response_message=response.text)
+
+        status, message = result
+        if not isinstance(status, int) or not isinstance(message, str):
+            raise UnexpectedResponseError(str(result), status_code=response.status_code, response_message=response.text)
+
+        if not status:
+            if message.endswith('not found') or message == "Couldn't find that principal":
+                raise NotFoundError(message)
+            raise _refusal_error(message)
+
+        return [message]
+
+    def remove_user_from_group(self, user_id: str | int, group_id: str | int) -> None:
+        """Remove a user from a group.
+
+        RT also confirms the removal if the user is not a member of the group.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param user_id: Identification of the user by name (str) or ID (int).
+        :param group_id: ID of the group (RT does not support group names here).
+        :raises NotFoundError: If the user does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        self._delete(_path('user', user_id, 'group', group_id))
+
+    def remove_user_from_all_groups(self, user_id: str | int) -> None:
+        """Remove a user from all groups which the user is a direct member of.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param user_id: Identification of the user by name (str) or ID (int).
+        :raises NotFoundError: If the user does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        self._delete(_path('user', user_id, 'groups'))
+
+    def search_groups(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        include_disabled: bool = False,
+    ) -> collections.abc.Iterator[dict[str, typing.Any]]:
+        """Search groups.
+
+        RT 6.0 returns only user defined groups, RT 5.0 also internal groups (e.g. system and role groups).
+
+        Example::
+
+            >>> tracker.search_groups(search_params=[{'field': 'Name', 'operator': 'LIKE', 'value': 'Staff'}])
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'Name', 'value': 'Staff'}]``. All groups if not specified.
+        :param fields: Fields returned for each group: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT. By default Name, Description and Disabled.
+        :param include_disabled: Set to True to also return disabled groups.
+        :returns: Iterator of the found groups.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        params: dict[str, str | int] = {
+            **_fields_params(fields, default_fields='Name,Description,Disabled'),
+            'find_disabled_rows': int(include_disabled),
+        }
+
+        for item in self._paged_request('groups', json_data=list(search_params or []), params=params):
+            yield item
+
+    def get_group(self, group_id: str | int) -> dict[str, typing.Any]:
+        """Get a group.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param group_id: ID of the group (RT does not support group names here).
+        :returns: The group as dictionary, including its direct members in the key Members (users by name,
+                  groups by ID).
+        :raises NotFoundError: If the group does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._dict_result(self._send('GET', _path('group', group_id)))
+
+    def create_group(self, name: str, **kwargs: JSONInput) -> int:
+        """Create a user defined group.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param name: Name of the group, which must be unique.
+        :param kwargs: Other fields to set, e.g. Description.
+        :returns: ID of the new group.
+        :raises BadRequestError: If RT rejects the request, e.g. if a group with the name exists.
+        :raises NotAllowedError: If the user is not allowed to create groups.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = self._send('POST', 'group', json_data={'Name': name, **kwargs})
+
+        return int(self._created_id(self._dict_result(response)))
+
+    def edit_group(self, group_id: str | int, **kwargs: JSONInput) -> list[str]:
+        """Edit a group.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param group_id: ID of the group (RT does not support group names here).
+        :param kwargs: Fields to set, e.g. Name, Description, Disabled. RT ignores unknown fields.
+        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+        :raises NotFoundError: If the group does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._list_result(self._send('PUT', _path('group', group_id), json_data=kwargs))
+
+    def delete_group(self, group_id: str | int) -> None:
+        """Disable a group.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param group_id: ID of the group (RT does not support group names here).
+        :raises NotFoundError: If the group does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        self._delete(_path('group', group_id))
+
+    def get_group_members(
+        self,
+        group_id: str | int,
+        *,
+        recursive: bool = False,
+        users: bool = True,
+        groups: bool = True,
+    ) -> collections.abc.Iterator[dict[str, typing.Any]]:
+        """Get the members of a group.
+
+        RT returns only the ID, type (user or group) and _url of each member, :py:meth:`get_group`
+        returns the direct members with the names of users.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param group_id: ID of the group (RT does not support group names here).
+        :param recursive: Set to True to also return the members of member groups. RT then also returns the group
+                          itself, and users which are members of several of the groups more than once.
+        :param users: Set to False to not return users.
+        :param groups: Set to False to not return groups.
+        :returns: Iterator of the members.
+        :raises InvalidUseError: If both *users* and *groups* are False.
+        :raises NotFoundError: If the group does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        if not users and not groups:
+            raise InvalidUseError('At least one of users and groups must be True.')
+
+        params: dict[str, str | int] = {}
+        if recursive:
+            params['recursively'] = 1
+        if not users:
+            params['users'] = 0
+        if not groups:
+            params['groups'] = 0
+
+        for item in self._paged_request(_path('group', group_id, 'members'), params=params):
+            yield item
+
+    def add_group_member(self, group_id: str | int, principal_id: str | int) -> list[str]:
+        """Add a user or group as member to a group.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param group_id: ID of the group (RT does not support group names here).
+        :param principal_id: ID of the user or group to add (RT does not support names here).
+        :returns: Status messages of RT, e.g. ``['Member added: alice']``.
+        :raises NotFoundError: If the group or the member does not exist.
+        :raises InvalidUseError: If RT refused to add the member, e.g. if it is already a member of the group.
+        :raises NotAllowedError: If the user is not allowed to change the members of the group.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        msg = self._list_result(self._send('PUT', _path('group', group_id, 'members'), json_data=[principal_id]))
+
+        if len(msg) != 1:
+            raise UnexpectedResponseError(str(msg))
+
+        if not msg[0].startswith('Member added'):
+            if msg[0] == "Couldn't find that principal":
+                raise NotFoundError(msg[0])
+            raise _refusal_error(msg[0])
+
+        return msg
+
+    def remove_group_member(self, group_id: str | int, principal_id: str | int) -> None:
+        """Remove a user or group from the members of a group.
+
+        RT also confirms the removal if the principal is not a member of the group.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param group_id: ID of the group (RT does not support group names here).
+        :param principal_id: ID of the user or group to remove (RT does not support names here).
+        :raises NotFoundError: If the group does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        self._delete(_path('group', group_id, 'member', principal_id))
+
+    def remove_all_group_members(self, group_id: str | int) -> None:
+        """Remove all direct members of a group.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param group_id: ID of the group (RT does not support group names here).
+        :raises NotFoundError: If the group does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        self._delete(_path('group', group_id, 'members'))
+
     def get_queue(self, queue_id: str | int) -> dict[str, typing.Any]:
         """Get queue details.
 
@@ -1597,3 +1891,474 @@ class Rt:
             },
         ):
             yield transaction
+
+    def search_custom_fields(
+        self,
+        *,
+        object_type: CustomFieldObjectType | None = None,
+        object_id: str | int | None = None,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        include_disabled: bool = False,
+    ) -> collections.abc.Iterator[dict[str, typing.Any]]:
+        """Search custom fields, all or those applied to a queue, catalog or class.
+
+        Example::
+
+            >>> tracker.search_custom_fields(object_type='queue', object_id=1)
+            >>> tracker.search_custom_fields(search_params=[{'field': 'LookupType', 'value': 'RT::Queue-RT::Ticket'}])
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param object_type: ``'queue'``, ``'catalog'`` or ``'class'`` to search only the custom fields applied to
+                            the object *object_id*, ``None`` (default) to search all custom fields.
+        :param object_id: ID of the queue, catalog or class (RT does not support names here).
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'Name', 'value': 'Severity'}]``. All custom fields if not specified.
+        :param fields: Fields returned for each custom field: a comma separated string or list of fields, or a
+                       dictionary with query parameters as defined by RT. By default Name, Type, Description,
+                       LookupType, MaxValues and Disabled.
+        :param include_disabled: Set to True to also return disabled custom fields.
+        :returns: Iterator of the found custom fields.
+        :raises InvalidUseError: If *object_type* is not supported, or only one of *object_type* and *object_id*
+                                 is specified.
+        :raises NotFoundError: If the queue, catalog or class does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        if (object_type is None) != (object_id is None):
+            raise InvalidUseError('object_type and object_id must be specified together.')
+
+        if object_type is None:
+            selector = 'customfields'
+        else:
+            if object_type not in VALID_CUSTOM_FIELD_OBJECT_TYPES:
+                raise InvalidUseError(f'Unsupported object type. Use one of "{", ".join(VALID_CUSTOM_FIELD_OBJECT_TYPES)}".')
+            selector = _path(object_type, typing.cast('str | int', object_id), 'customfields')
+
+        search_params = list(search_params or [])
+        if not search_params and object_type is None:
+            # RT returns no custom field for a search of all custom fields without a condition
+            search_params = [{'field': 'id', 'operator': '>', 'value': 0}]
+
+        params: dict[str, str | int] = {
+            **_fields_params(fields, default_fields='Name,Type,Description,LookupType,MaxValues,Disabled'),
+            'find_disabled_rows': int(include_disabled),
+        }
+
+        for item in self._paged_request(selector, json_data=search_params, params=params):
+            yield item
+
+    def get_custom_field(self, custom_field_id: str | int) -> dict[str, typing.Any]:
+        """Get a custom field.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :returns: The custom field as dictionary, including the names of its values in the key Values for the
+                  type Select.
+        :raises NotFoundError: If the custom field does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._dict_result(self._send('GET', _path('customfield', custom_field_id)))
+
+    def create_custom_field(self, name: str, field_type: str, lookup_type: str, **kwargs: JSONInput) -> int:
+        """Create a custom field.
+
+        Example::
+
+            >>> tracker.create_custom_field('Severity', 'Select', 'RT::Queue-RT::Ticket', MaxValues=1, Queue='General')
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param name: Name of the custom field. RT does not require it to be unique.
+        :param field_type: Type of the custom field, e.g. Freeform, Select, Text, Wikitext, Image, Binary, Combobox,
+                           Autocomplete, Date, DateTime, IPAddress or IPAddressRange.
+        :param lookup_type: Type of the objects the custom field is for, e.g. ``'RT::Queue-RT::Ticket'`` (tickets),
+                            ``'RT::Queue-RT::Ticket-RT::Transaction'`` (ticket transactions), ``'RT::Queue'``,
+                            ``'RT::User'``, ``'RT::Group'``, ``'RT::Catalog-RT::Asset'`` (assets) or
+                            ``'RT::Class-RT::Article'`` (articles).
+        :param kwargs: Other fields to set, e.g. Description, MaxValues (0 for unlimited, 1 for a single value),
+                       Pattern, EntryHint, SortOrder, or Queue (name or ID of a single queue to apply the custom field
+                       to, see :py:meth:`apply_custom_field` for more).
+        :returns: ID of the new custom field.
+        :raises BadRequestError: If RT rejects the request, e.g. for an invalid type or an unknown queue.
+        :raises NotAllowedError: If the user is not allowed to create custom fields.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = self._send('POST', 'customfield', json_data={'Name': name, 'Type': field_type, 'LookupType': lookup_type, **kwargs})
+
+        return int(self._created_id(self._dict_result(response)))
+
+    def edit_custom_field(self, custom_field_id: str | int, **kwargs: JSONInput) -> list[str]:
+        """Edit a custom field.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :param kwargs: Fields to set, e.g. Name, Description, MaxValues, Pattern, EntryHint, SortOrder, Disabled.
+                       RT ignores unknown fields.
+        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+                  RT reports invalid values only in these messages, e.g. ``'CustomField 1: Illegal value for Type'``,
+                  while the other fields are still changed.
+        :raises NotFoundError: If the custom field does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._list_result(self._send('PUT', _path('customfield', custom_field_id), json_data=kwargs))
+
+    def delete_custom_field(self, custom_field_id: str | int) -> None:
+        """Disable a custom field.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :raises NotFoundError: If the custom field does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        self._delete(_path('customfield', custom_field_id))
+
+    def get_custom_field_applies_to(self, custom_field_id: str | int) -> collections.abc.Iterator[dict[str, typing.Any]]:
+        """Get the objects which a custom field is applied to.
+
+        This endpoint is not part of the REST2 documentation of RT.
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :returns: Iterator of the objects, each a dictionary with the keys ObjectId, ObjectType, ObjectName and _url,
+                  e.g. ``{'ObjectId': 1, 'ObjectType': 'RT::Queue', 'ObjectName': 'General', ...}``, or
+                  ``{'ObjectId': 0, 'Global': True}`` if the custom field is applied globally.
+        :raises NotFoundError: If the custom field does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        for item in self._paged_request(_path('customfield', custom_field_id, 'appliesto')):
+            yield item
+
+    def apply_custom_field(self, custom_field_id: str | int, object_id: int) -> list[str]:
+        """Apply a custom field to an object, e.g. a ticket custom field to a queue.
+
+        The type of the object is determined by the lookup type of the custom field, e.g. a queue for a ticket
+        custom field. This endpoint is not part of the REST2 documentation of RT.
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :param object_id: ID of the object (RT does not support names here), or 0 to apply the custom field
+                          globally, which removes it from all objects it was applied to.
+        :returns: Status messages of RT, e.g. ``['Added custom field Severity to General.']``.
+        :raises BadRequestError: If RT rejects the request, e.g. if the object or the custom field does not exist.
+        :raises ConflictError: If the custom field is already applied to the object.
+        :raises NotAllowedError: If the user is not allowed to apply the custom field.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = self._send('POST', _path('customfield', custom_field_id, 'appliesto'), json_data={'ObjectId': object_id})
+        result = self._dict_result(response)
+
+        message = result.get('message')
+        if not isinstance(message, str):
+            raise UnexpectedResponseError(str(result), status_code=response.status_code, response_message=response.text)
+
+        return [message]
+
+    def unapply_custom_field(self, custom_field_id: str | int, object_id: int) -> None:
+        """Remove a custom field from an object it is applied to.
+
+        This endpoint is not part of the REST2 documentation of RT.
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :param object_id: ID of the object (RT does not support names here), or 0 to remove the global application.
+        :raises NotFoundError: If the custom field is not applied to the object.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        self._delete(_path('customfield', custom_field_id, 'appliesto', 'object', object_id))
+
+    def get_custom_field_values(
+        self,
+        custom_field_id: str | int,
+        *,
+        search_params: JSONSearchParams | None = None,
+    ) -> collections.abc.Iterator[dict[str, typing.Any]]:
+        """Get the values of a custom field, e.g. the selectable values of the type Select.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'Name', 'value': 'High'}]``. All values if not specified.
+        :returns: Iterator of the values, each a dictionary with the keys id, name, type and _url.
+        :raises NotFoundError: If the custom field does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        for item in self._paged_request(_path('customfield', custom_field_id, 'values'), json_data=list(search_params or [])):
+            yield item
+
+    def get_custom_field_value(self, custom_field_id: str | int, value_id: str | int) -> dict[str, typing.Any]:
+        """Get a value of a custom field.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :param value_id: ID of the value.
+        :returns: The value as dictionary, e.g. with the keys id, Name, Description, Category and SortOrder.
+        :raises NotFoundError: If the custom field or the value does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._dict_result(self._send('GET', _path('customfield', custom_field_id, 'value', value_id)))
+
+    def add_custom_field_value(self, custom_field_id: str | int, name: str, **kwargs: JSONInput) -> int:
+        """Add a value to a custom field, e.g. a selectable value of the type Select.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :param name: The value. RT does not require it to be unique.
+        :param kwargs: Other fields to set, e.g. Description, Category, SortOrder.
+        :returns: ID of the new value.
+        :raises BadRequestError: If RT rejects the request.
+        :raises NotFoundError: If the custom field does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = self._send('POST', _path('customfield', custom_field_id, 'value'), json_data={'Name': name, **kwargs})
+
+        return int(self._created_id(self._dict_result(response)))
+
+    def edit_custom_field_value(self, custom_field_id: str | int, value_id: str | int, **kwargs: JSONInput) -> list[str]:
+        """Edit a value of a custom field.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :param value_id: ID of the value.
+        :param kwargs: Fields to set, e.g. Name, Description, Category, SortOrder. RT ignores unknown fields.
+        :returns: Status messages of RT, one for each changed field (empty if nothing was changed).
+        :raises NotFoundError: If the custom field or the value does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._list_result(self._send('PUT', _path('customfield', custom_field_id, 'value', value_id), json_data=kwargs))
+
+    def delete_custom_field_value(self, custom_field_id: str | int, value_id: str | int) -> None:
+        """Remove a value from a custom field.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param custom_field_id: ID of the custom field (RT does not support names here).
+        :param value_id: ID of the value.
+        :raises NotFoundError: If the custom field or the value does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        self._delete(_path('customfield', custom_field_id, 'value', value_id))
+
+    def get_custom_field_file(self, value_id: str | int) -> bytes:
+        """Get the content of a file stored as value of an Image or Binary custom field of an object, e.g. a ticket.
+
+        The custom field values of a ticket or asset contain a ``_url`` like ``.../REST/2.0/download/cf/12`` for
+        each file, its last part is the ID. To set a file as value, pass an :py:class:`~rt.common.Attachment`
+        converted with ``to_dict()``, e.g. ``edit_ticket(1, CustomFields={'Screenshot': attachment.to_dict()})``.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param value_id: ID of the custom field value of the object (not of a value of the custom field).
+        :returns: Content of the file.
+        :raises NotAllowedError: If the value does not exist or the user is not allowed to see it
+                                 (RT returns status code 403 for both).
+        :raises RtConnectionError: In case of a connection error.
+        """
+        response = self._send('GET', _path('download', 'cf', value_id))
+
+        return response.content
+
+    @staticmethod
+    def _rights_object(object_type: RightsObjectType, object_id: str | int | None) -> tuple[str | int, ...]:
+        """Return the path segments of the object of rights.
+
+        :raises InvalidUseError: If the object type is not supported, or the object ID is missing or specified for
+                                 global rights.
+        """
+        if object_type not in VALID_RIGHTS_OBJECT_TYPES:
+            raise InvalidUseError(f'Unsupported object type. Use one of "{", ".join(VALID_RIGHTS_OBJECT_TYPES)}".')
+
+        if object_type == 'global':
+            if object_id is not None:
+                raise InvalidUseError('object_id must not be specified for global rights.')
+            return ('global',)
+
+        if object_id is None or object_id == '':
+            raise InvalidUseError(f'object_id is required for rights on a {object_type}.')
+
+        return (object_type, object_id)
+
+    @staticmethod
+    def _principal(user: str | int | None, group: str | int | None) -> tuple[typing.Literal['user', 'group'], str | int]:
+        """Return the type and the identification of the user or group given for rights.
+
+        :raises InvalidUseError: If not exactly one of user and group is specified.
+        """
+        if (user is None) == (group is None):
+            raise InvalidUseError('Specify either user or group.')
+
+        if user is not None:
+            return 'user', user
+
+        return 'group', typing.cast('str | int', group)
+
+    def get_rights(
+        self,
+        object_type: RightsObjectType,
+        object_id: str | int | None = None,
+        *,
+        user: str | int | None = None,
+        group: str | int | None = None,
+    ) -> collections.abc.Iterator[dict[str, typing.Any]]:
+        """Get the rights granted on an object or globally.
+
+        Example::
+
+            >>> tracker.get_rights('queue', 'General')
+            >>> tracker.get_rights('global', user='alice')
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param object_type: Type of the object: ``'queue'``, ``'group'``, ``'class'``, ``'catalog'``,
+                            ``'customfield'``, or ``'global'`` for the rights granted on the whole system.
+        :param object_id: Name or ID of the queue, class or catalog, or ID of the group or custom field.
+                          Not specified for global rights.
+        :param user: Only return the rights granted to this user, identified by name (str) or ID (int).
+        :param group: Only return the rights granted to this group, identified by ID (RT does not support names here,
+                      a name matches no rights).
+        :returns: Iterator of the granted rights, each a dictionary with the key Right and either User or Group,
+                  e.g. ``{'Right': 'CreateTicket', 'Group': {'id': 7, 'Name': 'Staff', '_url': '...'}}``.
+        :raises InvalidUseError: If the object type is not supported, the object ID is missing or specified for
+                                 global rights, or both user and group are specified.
+        :raises NotFoundError: If the object does not exist.
+        :raises NotAllowedError: If the user is not allowed to see the rights.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        selector = _path(*self._rights_object(object_type, object_id), 'rights')
+
+        if user is not None and group is not None:
+            raise InvalidUseError('Specify either user or group, but not both.')
+
+        params: dict[str, str | int] = {}
+        if user is not None:
+            params['user'] = user
+        if group is not None:
+            params['group'] = group
+
+        for item in self._paged_request(selector, params=params):
+            yield item
+
+    def get_available_rights(self, object_type: RightsObjectType, object_id: str | int | None = None) -> dict[str, dict[str, str]]:
+        """Get the rights which can be granted on an object or globally, grouped by category.
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param object_type: Type of the object, see :py:meth:`get_rights`.
+        :param object_id: Identification of the object, see :py:meth:`get_rights`. Not specified for global rights.
+        :returns: Dictionary of the categories (e.g. General, Staff, Admin, Status), each a dictionary of the rights
+                  and their descriptions, e.g. ``{'General': {'CreateTicket': 'Create tickets in this queue', ...}}``.
+        :raises InvalidUseError: If the object type is not supported, or the object ID is missing or specified for
+                                 global rights.
+        :raises NotFoundError: If the object does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = self._send('GET', _path(*self._rights_object(object_type, object_id), 'rights', 'available'))
+        result = self._dict_result(response)
+
+        categories: dict[str, dict[str, str]] = {}
+        for category, rights in result.items():
+            if not isinstance(rights, dict) or not all(isinstance(description, str) for description in rights.values()):
+                raise UnexpectedResponseError(str(result), status_code=response.status_code, response_message=response.text)
+            categories[category] = typing.cast('dict[str, str]', rights)
+
+        return categories
+
+    def grant_right(
+        self,
+        object_type: RightsObjectType,
+        object_id: str | int | None,
+        right: str,
+        *,
+        user: str | int | None = None,
+        group: str | int | None = None,
+    ) -> dict[str, typing.Any]:
+        """Grant a right on an object or globally to a user or group.
+
+        Example::
+
+            >>> tracker.grant_right('queue', 'General', 'CreateTicket', group=7)
+            >>> tracker.grant_right('global', None, 'SuperUser', user='alice')
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param object_type: Type of the object, see :py:meth:`get_rights`.
+        :param object_id: Identification of the object, see :py:meth:`get_rights`. ``None`` for global rights.
+        :param right: Name of the right, e.g. CreateTicket (see :py:meth:`get_available_rights`).
+        :param user: User to grant the right to, identified by name (str) or ID (int).
+        :param group: Group to grant the right to, identified by ID (only IDs are supported, as RT does not
+                      support group names when revoking rights).
+        :returns: The granted right, e.g. ``{'Right': 'CreateTicket', 'Group': {'id': 7, 'Name': 'Staff', ...}}``.
+        :raises InvalidUseError: If the object type is not supported, the object ID is missing or specified for
+                                 global rights, or not exactly one of user and group is specified.
+        :raises BadRequestError: If RT rejects the request, e.g. for an unknown right, user or group.
+        :raises ConflictError: If the right is already granted.
+        :raises NotFoundError: If the object does not exist.
+        :raises NotAllowedError: If the user is not allowed to grant rights on the object.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        selector = _path(*self._rights_object(object_type, object_id), 'rights')
+        principal_type, principal = self._principal(user, group)
+
+        if principal_type == 'user' and isinstance(principal, str):
+            json_data: dict[str, JSONInput] = {'Right': right, 'User': principal}
+        else:
+            json_data = {'Right': right, principal_type.capitalize(): {'id': principal}}
+
+        return self._dict_result(self._send('POST', selector, json_data=json_data))
+
+    def revoke_right(
+        self,
+        object_type: RightsObjectType,
+        object_id: str | int | None,
+        right: str,
+        *,
+        user: str | int | None = None,
+        group: str | int | None = None,
+    ) -> None:
+        """Revoke a right on an object or globally from a user or group.
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param object_type: Type of the object, see :py:meth:`get_rights`.
+        :param object_id: Identification of the object, see :py:meth:`get_rights`. ``None`` for global rights.
+        :param right: Name of the right, e.g. CreateTicket.
+        :param user: User to revoke the right from, identified by name (str) or ID (int).
+        :param group: Group to revoke the right from, identified by ID (RT does not support group names here).
+        :raises InvalidUseError: If the object type is not supported, the object ID is missing or specified for
+                                 global rights, or not exactly one of user and group is specified.
+        :raises NotFoundError: If the right is not granted to the user or group, or the object, user or group
+                               does not exist (RT returns status code 404 for all of them).
+        :raises NotAllowedError: If the user is not allowed to revoke rights on the object.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        principal_type, principal = self._principal(user, group)
+
+        self._delete(_path(*self._rights_object(object_type, object_id), 'rights', right, principal_type, principal))
+
+    def get_system_info(self) -> dict[str, typing.Any]:
+        """Get information about the RT system.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :returns: Dictionary with the RT version and the installed plugins, e.g.
+                  ``{'Version': '6.0.4', 'Plugins': []}``.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._dict_result(self._send('GET', 'rt'))

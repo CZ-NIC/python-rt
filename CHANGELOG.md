@@ -111,8 +111,33 @@ Python 3.11 or newer is required.
 - The type aliases `TYPE_VALID_TICKET_LINK_NAMES` and `TYPE_CONTENT_TYPE` were renamed to `TicketLinkName` and `ContentType`.
 - `Attachment` is immutable; create a modified copy with `dataclasses.replace(attachment, file_name='new.txt')`.
 - The `base_url` attribute was removed; use `tracker.url.removesuffix('REST/2.0/')` if needed.
+- The parameter `query_filter` of `get_attachments()` and `get_attachments_ids()` was renamed to `search_params`, as
+  in all other searches. The search conditions no longer replace the condition matching only files: pass
+  `files_only=False` to get all parts of the messages (e.g. their text), which `query_filter=[]` returned before:
+  ```python
+  # before
+  tracker.get_attachments(1, query_filter=[{'field': 'TransactionId', 'value': 42}, {'field': 'Filename', 'operator': 'IS NOT', 'value': ''}])
+  tracker.get_attachments_ids(1, query_filter=[])
+  # after
+  tracker.get_attachments(1, search_params=[{'field': 'TransactionId', 'value': 42}])
+  tracker.get_attachments_ids(1, files_only=False)
+  ```
+- `search()` raises `InvalidUseError` if `raw_query` is combined with conditions (keyword arguments or `conditions`),
+  which were silently ignored before; add them to the query instead. `queue` and `order` can still be combined with it.
+- `user_exists()` requires `privileged`: before, it defaulted to `True`, so it returned `False` for existing
+  unprivileged users (e.g. requestors), which was easily overlooked:
+  ```python
+  # before
+  tracker.user_exists('alice')
+  # after: the same, or privileged=False for any existing user
+  tracker.user_exists('alice', privileged=True)
+  ```
+- `get_links()` also returns links to URLs (`type` `external`, e.g. created with `edit_link(1, 'RefersTo', url)`),
+  which were missing before; filter by `link['type'] == 'ticket'` for the links between tickets only.
 
 ### Changes
+- REST2 `UnexpectedResponseError` for unexpected status codes (e.g. 500) contains the error message of RT, e.g.
+  `Received status code 500 instead of 200: Internal Server Error`.
 - REST2 `search()` (and `last_updated()` and `new_correspondence()`, which use it) sends the TicketSQL query in the
   body of a POST request instead of the URL, so long queries are not limited by the maximum length of URLs of web
   servers and proxies, and search terms do not appear in their access logs. The results are the same.
@@ -197,6 +222,13 @@ Python 3.11 or newer is required.
   were truncated.
 - REST2 `search()` with custom fields (`CF_<name>=...`) created a malformed query and always failed.
 - REST2 `search()` failed for values containing a single quote.
+- REST2 `search()` used field names of conditions as they are, so a field name passed in `conditions` (e.g. from user
+  input) could change the meaning of the query. Field names other than plain names like `Subject` or
+  `Requestor.EmailAddress` are quoted now, which also allows e.g. `conditions={'CustomRole.{Manager}': 'alice'}`.
+- REST2 `search_assets()` with a condition on `Catalog` in `search_params` returned the assets of all catalogs.
+- REST2 `edit_queue()` and `create_queue()` rejected the fields `SubjectTag`, `CustomFields`, `Cc` and `AdminCc`, which
+  RT supports.
+- REST2 `create_ticket()` accepts the ID of the queue as well, which RT supports (the type hint only allowed names).
 - REST2 `edit_ticket()` did not detect non-existent users or queues for many names (e.g. queue "Support").
 - REST2 paginated results: no `NotFoundError` anymore for empty results of users who are not allowed to see all results
   (RT >= 5.0.5), no more missing results after a page whose items are all hidden from the user, and no more duplicate

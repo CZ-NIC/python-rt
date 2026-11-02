@@ -71,15 +71,18 @@ def test_ticket_attachments(rt_connection: Rt):
     att_content = base64.b64decode((rt_connection.get_attachment(att_id))['Content'])
     assert att_content == attachment_content
 
-    # test filter parameter
-    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, query_filter=None)]
+    # test filter parameters
+    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id)]
     assert len(att_ids) == 1
 
-    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, query_filter=[])]
+    # all parts of the message, not only the file
+    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, files_only=False)]
     assert len(att_ids) == 3
 
-    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, query_filter=[{'field': 'Filename', 'value': 'non-existant.txt'}])]
+    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': 'non-existant.txt'}])]
     assert not att_ids
+    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': attachment_name}])]
+    assert len(att_ids) == 1
 
 
 def test_ticket_take(rt_connection: Rt):
@@ -318,12 +321,11 @@ def test_search_attachments(rt_connection: Rt):
     either = [{'field': 'Filename', 'value': f'{prefix}-a.pdf'}, {'field': 'Filename', 'value': f'{prefix}-c.txt'}]
     assert sorted([item['Filename'] for item in rt_connection.search_attachments(search_params=either)]) == [f'{prefix}-a.pdf', f'{prefix}-c.txt']
 
-    # the files of a single comment, with search_attachments and with get_attachments as in its docstring
+    # the files of a single comment, with search_attachments and with get_attachments
     transaction_id = next(item['TransactionId'] for item in found if item['Filename'] == f'{prefix}-c.txt')
     of_transaction = [{'field': 'TransactionId', 'value': transaction_id}]
     assert [item['Filename'] for item in rt_connection.search_attachments(search_params=of_transaction)] == [f'{prefix}-c.txt']
-    query_filter = [*of_transaction, {'field': 'Filename', 'operator': 'IS NOT', 'value': ''}]
-    assert [item['Filename'] for item in rt_connection.get_attachments(ticket_id, query_filter=query_filter)] == [f'{prefix}-c.txt']
+    assert [item['Filename'] for item in rt_connection.get_attachments(ticket_id, search_params=of_transaction)] == [f'{prefix}-c.txt']
 
     # all parts of the message: the container, the text of the message and the file
     parts = [item for item in rt_connection.search_attachments(search_params=of_transaction, files_only=False)]

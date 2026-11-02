@@ -46,7 +46,7 @@ SearchFormat: typing.TypeAlias = typing.Literal['i', 's', 'l']
 
 # Fields returned for each ticket by a ticket search with format 'l'.
 _SEARCH_LONG_FORMAT_FIELDS = (
-    'Owner,Status,Created,Subject,Queue,CustomFields,Requestor,Cc,AdminCc,Started,Created,TimeEstimated,Due,Type,InitialPriority,Priority,TimeLeft,LastUpdated'
+    'Owner,Status,Created,Subject,Queue,CustomFields,Requestor,Cc,AdminCc,Started,TimeEstimated,Due,Type,InitialPriority,Priority,TimeLeft,LastUpdated'
 )
 
 # Objects on which rights can be granted with REST2; 'global' grants rights on the whole system.
@@ -124,6 +124,10 @@ _QUEUE_FIELDS = frozenset(
         'SLADisabled',
         'Lifecycle',
         'SortOrder',
+        'SubjectTag',
+        'CustomFields',
+        'Cc',
+        'AdminCc',
     }
 )
 
@@ -166,6 +170,10 @@ def _path(*segments: str | int) -> str:
     return '/'.join(encoded_segments)
 
 
+# Field names of TicketSQL which are used without quotes, e.g. Subject or Requestor.EmailAddress.
+_PLAIN_FIELD_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*')
+
+
 def _quote_value(value: object) -> str:
     """Quote a value for use in a TicketSQL query.
 
@@ -181,7 +189,8 @@ def _build_ticket_query(queue: str | None, raw_query: str | None, conditions: co
     :param queue: Queue to search in, or None to search in all queues.
     :param raw_query: TicketSQL query which is used as is instead of the conditions.
     :param conditions: Field names, optionally with an operator suffix (e.g. ``Subject__like``), and the values
-                       to search for. All values are quoted, so they can not change the meaning of the query.
+                       to search for. All values and field names other than plain names like ``Subject`` or
+                       ``Requestor.EmailAddress`` are quoted, so they can not change the meaning of the query.
     :returns: The query, all parts combined with AND.
     :raises InvalidUseError: If an unsupported operator is used.
     """
@@ -213,6 +222,9 @@ def _build_ticket_query(queue: str | None, raw_query: str | None, conditions: co
             if key.startswith('CF_'):
                 # custom field names may contain spaces and other special characters, so quote them as well
                 key = _quote_value(f'CF.{{{key[3:]}}}')
+            elif not _PLAIN_FIELD_NAME.fullmatch(key):
+                # e.g. 'CustomRole.{Manager}'; quoted like values, so names can not change the meaning of the query
+                key = _quote_value(key)
 
             query.append(f'{key}{operator}{query_value}')
 

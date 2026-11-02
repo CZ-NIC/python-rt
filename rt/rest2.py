@@ -82,6 +82,10 @@ __authors__ = [
 ]
 
 
+# Names (ref) of the links between tickets in the hyperlinks of a ticket.
+_LINK_REFS = frozenset({'depends-on', 'depended-on-by', 'parent', 'child', 'refers-to', 'referred-to-by'})
+
+
 class Rt:
     """:term:`API` for Request Tracker according to
     https://docs.bestpractical.com/rt/6.0.4/RT/REST2.html. Interface is based on
@@ -174,7 +178,7 @@ class Rt:
             self.session = httpx2.Client(timeout=http_timeout, verify=ssl_verify, proxy=proxy, auth=http_auth)
             self._close_session = True
 
-            if token is not None:  # pragma: no cover  # no way to add tests for this with the current docker image
+            if token is not None:
                 self.session.headers['Authorization'] = f'token {token}'
 
     def close(self) -> None:
@@ -343,7 +347,10 @@ class Rt:
 
         # 204 (No Content) is returned when deleting resources
         if status_code not in (200, 201, 204):
-            raise UnexpectedResponseError(f'Received status code {status_code} instead of 200.', status_code=status_code, response_message=text)
+            message = cls._error_message(response, '')
+            raise UnexpectedResponseError(
+                f'Received status code {status_code} instead of 200' + (f': {message}' if message else '.'), status_code=status_code, response_message=text
+            )
 
     @staticmethod
     def _decode_json(response: httpx2.Response) -> JSONValue:
@@ -606,10 +613,9 @@ class Rt:
 
         Example::
 
-            >>> tracker = Rt(url='http://tracker.example.com/REST/2.0/', http_auth=httpx2.BasicAuth('rt-username', 'top-secret'))
-            >>> tickets = list(tracker.search(CF_Domain='example.com', Subject__like='warning'))
-            >>> tickets = list(tracker.search(conditions={'CF_Contact Email': 'a@example.com', 'Status': 'open'}))
-            >>> tickets = list(tracker.search(queue='General', order='Status', raw_query="id='1'+OR+id='2'+OR+id='3'"))
+            >>> tracker.search(CF_Domain='example.com', Subject__like='warning')
+            >>> tracker.search(conditions={'CF_Contact Email': 'a@example.com', 'Status': 'open'})
+            >>> tracker.search(queue='General', order='Status', raw_query="id = 1 OR id = 2 OR id = 3")
 
         The query is sent in the body of a POST request, so it is not limited by the maximum length of URLs and does
         not appear in the access logs of RT or of proxies in front of it.
@@ -621,13 +627,9 @@ class Rt:
         :param order:      Name of field sorting result list, for descending
                            order put - before the field name. E.g. -Created
                            will put the newest tickets at the beginning
-        :param raw_query:  A raw query to provide to RT if you know what
-                             you are doing. You may still pass Queue and order
-                             kwargs, so use these instead of including them in
-                             the raw query. You can refer to the RT query builder.
-                             If passing raw_query, *conditions* and all other ``**kwargs`` will be ignored.
-                             The raw query is passed to RT as is, so never include
-                             untrusted input in it.
+        :param raw_query:  A TicketSQL query (see the query builder of RT), used instead of *conditions* and
+                           *kwargs*. *queue* and *order* can still be used. The query is passed to RT as is,
+                           so never include untrusted input in it.
         :param fields:     Fields returned for each ticket:
 
                              - i: only *id* fields are populated
@@ -678,14 +680,18 @@ class Rt:
                              result to the tickets satisfying all of them.
 
                              Values are quoted, so they can not change the
-                             meaning of the query.
+                             meaning of the query. Field names other than plain
+                             names like ``Subject`` or ``Requestor.EmailAddress``
+                             are quoted as well, e.g. ``'CustomRole.{Manager}'``.
 
-        :returns: Iterator over matching tickets. Each ticket is the same dictionary
-                  as in :py:meth:`~Rt.get_ticket`.
+        :returns: Iterator over matching tickets, each a dictionary with the fields selected by *fields*.
         :raises BadRequestError: If the query is malformed.
-        :raises InvalidUseError: If an unsupported operator is used, or a condition is given in both
-                                 *conditions* and *kwargs*.
+        :raises InvalidUseError: If an unsupported operator is used, a condition is given in both *conditions* and
+                                 *kwargs*, or *raw_query* is combined with conditions.
         """
+        if raw_query is not None and (conditions or kwargs):
+            raise InvalidUseError('raw_query can not be combined with conditions; add them to the query instead.')
+
         if conditions:
             duplicates = conditions.keys() & kwargs.keys()
             if duplicates:
@@ -719,31 +725,10 @@ class Rt:
                        ``{'fields[Owner]': 'Name,EmailAddress'}``. RT always returns all fields of
                        the ticket itself, so a list of fields as in :py:meth:`~Rt.search` is not supported.
 
-        :returns: Dictionary with key, value pairs for ticket with
-                  *ticket_id*. List of keys:
-
-                      * id
-                      * numerical_id
-                      * Queue
-                      * Owner
-                      * Creator
-                      * Subject
-                      * Status
-                      * Priority
-                      * InitialPriority
-                      * FinalPriority
-                      * Requestors
-                      * Cc
-                      * AdminCc
-                      * Created
-                      * Starts
-                      * Started
-                      * Due
-                      * Resolved
-                      * Told
-                      * TimeEstimated
-                      * TimeWorked
-                      * TimeLeft
+        :returns: The ticket as dictionary with the keys id, EffectiveId, Type, Queue, Subject, Status, Owner,
+                  Creator, LastUpdatedBy, Requestor, Cc, AdminCc, CustomRoles, CustomFields, Priority,
+                  InitialPriority, FinalPriority, Created, LastUpdated, Starts, Started, Due, Resolved,
+                  TimeEstimated, TimeWorked, TotalTimeWorked, TimeLeft and _hyperlinks.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         :raises NotFoundError: If there is no ticket with the specified ticket_id.
         """
@@ -753,7 +738,7 @@ class Rt:
 
     def create_ticket(
         self,
-        queue: str,
+        queue: str | int,
         *,
         subject: str | None = None,
         content: str | None = None,
@@ -763,7 +748,7 @@ class Rt:
     ) -> int:
         """Create new ticket and set given parameters.
 
-        Example of message sent to ``http://tracker.example.com/REST/2.0/ticket/new``::
+        Example of the request sent to ``http://tracker.example.com/REST/2.0/ticket``::
 
             { "Queue": "General",
               "Subject": "Ticket created through REST API",
@@ -777,7 +762,7 @@ class Rt:
 
         .. note:: Requires RT 5.0.0 or newer.
 
-        :param queue: Queue where to create ticket
+        :param queue: Name or ID of the queue to create the ticket in.
         :param subject: Optional subject for the ticket.
         :param content: Optional content of the ticket. Must be specified unless attachments are specified.
         :param content_type: Content-type of the Content parameter; can be either text/plain or text/html.
@@ -1163,10 +1148,11 @@ class Rt:
         self,
         ticket_id: str | int,
         *,
-        query_filter: list[dict[str, str]] | None = None,
+        search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
+        files_only: bool = True,
     ) -> collections.abc.Iterator[dict[str, typing.Any]]:
-        """Get attachment list for a given ticket.
+        """Get the attachments (files) of a ticket.
 
         Example of a return result:
 
@@ -1187,32 +1173,46 @@ class Rt:
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param ticket_id: ID of ticket
-        :param query_filter: JSON search filter, defaults to "filename is not empty". E.g. the files of a single
-                             reply or comment (transaction 42)::
-
-                                 [{'field': 'TransactionId', 'value': 42}, {'field': 'Filename', 'operator': 'IS NOT', 'value': ''}]
+        :param search_params: Conditions of the search as described for :py:meth:`search_attachments`, e.g. the
+                              files of a single reply or comment: ``[{'field': 'TransactionId', 'value': 42}]``.
         :param fields: Fields returned for each attachment: a comma separated string or list of fields,
                        or a dictionary with query parameters as defined by RT, e.g. ``{'fields[Creator]': 'Name'}``.
                        Defaults to Filename, ContentType and ContentLength.
+        :param files_only: Set to False to also return the other parts of messages, e.g. the text of a message
+                           (see :py:meth:`search_attachments`).
         :returns: Iterator of attachments belonging to given ticket.
         """
-        if query_filter is None:
-            query_filter = [{'field': 'Filename', 'operator': 'IS NOT', 'value': ''}]
-
         get_params = _fields_params(fields, default_fields='Filename,ContentType,ContentLength')
 
         for item in self._paged_request(
             _path('ticket', ticket_id, 'attachments'),
-            json_data=query_filter,
+            json_data=self._attachment_conditions(search_params, files_only=files_only),
             params=get_params,
         ):
             yield item
+
+    @staticmethod
+    def _attachment_conditions(search_params: JSONSearchParams | None, *, files_only: bool) -> list[collections.abc.Mapping[str, JSONInput]]:
+        """Return the conditions of a search of attachments.
+
+        :param search_params: Conditions of the caller, which are not modified.
+        :param files_only: Add a condition matching only files, i.e. attachments with a file name.
+        """
+        conditions = list(search_params or [])
+        if files_only:
+            # combined with AND also with conditions on Filename, which RT would combine with OR by default
+            conditions.append({'field': 'Filename', 'operator': 'IS NOT', 'value': '', 'entry_aggregator': 'AND'})
+        elif not conditions:
+            # RT returns no attachment for a search without a condition
+            conditions = [{'field': 'id', 'operator': '>', 'value': 0}]
+        return conditions
 
     def get_attachments_ids(
         self,
         ticket_id: str | int,
         *,
-        query_filter: list[dict[str, str]] | None = None,
+        search_params: JSONSearchParams | None = None,
+        files_only: bool = True,
     ) -> collections.abc.Iterator[int]:
         """Get IDs of attachments for given ticket.
 
@@ -1220,19 +1220,14 @@ class Rt:
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param ticket_id: ID of ticket
-        :param query_filter: JSON search filter, defaults to "filename is not empty". E.g. the files of a single
-                             reply or comment (transaction 42)::
-
-                                 [{'field': 'TransactionId', 'value': 42}, {'field': 'Filename', 'operator': 'IS NOT', 'value': ''}]
+        :param search_params: Conditions of the search, see :py:meth:`get_attachments`.
+        :param files_only: Set to False to also return the other parts of messages, see :py:meth:`get_attachments`.
         :returns: Iterator of IDs (type int) of attachments belonging to given
                   ticket.
         """
-        if query_filter is None:
-            query_filter = [{'field': 'Filename', 'operator': 'IS NOT', 'value': ''}]
-
         for item in self._paged_request(
             _path('ticket', ticket_id, 'attachments'),
-            json_data=query_filter,
+            json_data=self._attachment_conditions(search_params, files_only=files_only),
         ):
             attachment_id = item.get('id')
             if not isinstance(attachment_id, (str, int)):
@@ -1245,49 +1240,11 @@ class Rt:
         .. note:: Requires RT 5.0.0 or newer.
 
         :param attachment_id: ID of attachment to fetch
-        :returns: Attachment as dictionary with these keys:
-
-                      * Transaction
-                      * ContentType
-                      * Parent
-                      * Creator
-                      * Created
-                      * Filename
-                      * Content (base64 encoded string)
-                      * Headers
-                      * MessageId
-                      * ContentEncoding
-                      * id
-                      * Subject
-
-                  All these fields are strings, just 'Headers' holds another
-                  dictionary with attachment headers as strings e.g.:
-
-                      * Delivered-To
-                      * From
-                      * Return-Path
-                      * Content-Length
-                      * To
-                      * X-Seznam-User
-                      * X-QM-Mark
-                      * Domainkey-Signature
-                      * RT-Message-ID
-                      * X-RT-Incoming-Encryption
-                      * X-Original-To
-                      * Message-ID
-                      * X-Spam-Status
-                      * In-Reply-To
-                      * Date
-                      * Received
-                      * X-Country
-                      * X-Spam-Checker-Version
-                      * X-Abuse
-                      * MIME-Version
-                      * Content-Type
-                      * Subject
-
-                  Set of headers available depends on mailservers sending
-                  emails not on Request Tracker!
+        :returns: Attachment as dictionary with the keys id, TransactionId, Parent, ContentType, Filename, Subject,
+                  MessageId, Creator, Created, Headers, _hyperlinks and Content (base64 encoded string).
+                  'Headers' holds the headers of the attachment as string (one header per line), e.g.
+                  Content-Type, Content-Disposition and for emails From, To, Subject or Message-ID. Which headers
+                  exist depends on the mail servers which sent the email, not on RT.
 
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         :raises NotFoundError: If attachment with specified ID does not exist.
@@ -1327,17 +1284,9 @@ class Rt:
         :returns: Iterator of the found attachments.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        conditions = list(search_params or [])
-        if files_only:
-            # combined with AND also with conditions on Filename, which RT would combine with OR by default
-            conditions.append({'field': 'Filename', 'operator': 'IS NOT', 'value': '', 'entry_aggregator': 'AND'})
-        elif not conditions:
-            # RT returns no attachment for a search without a condition
-            conditions = [{'field': 'id', 'operator': '>', 'value': 0}]
-
         params = _fields_params(fields, default_fields='Filename,ContentType,ContentLength,TransactionId,Created')
 
-        for item in self._paged_request('attachments', json_data=conditions, params=params):
+        for item in self._paged_request('attachments', json_data=self._attachment_conditions(search_params, files_only=files_only), params=params):
             yield item
 
     def get_user(self, user_id: int | str) -> dict[str, typing.Any]:
@@ -1347,41 +1296,25 @@ class Rt:
 
         :param user_id: Identification of user by username (str) or user ID
                         (int)
-        :returns: User details as strings in dictionary with these keys for RT
-                  users:
-
-                      * Lang
-                      * RealName
-                      * Privileged
-                      * Disabled
-                      * Gecos
-                      * EmailAddress
-                      * Password
-                      * id
-                      * Name
-
-                  Or these keys for external users (e.g. Requestors) replying
-                  to email from RT:
-
-                      * RealName
-                      * Disabled
-                      * EmailAddress
-                      * Password
-                      * id
-                      * Name
+        :returns: The user as dictionary, e.g. with the keys id, Name, RealName, EmailAddress, Privileged, Disabled,
+                  Gecos, Comments, CustomFields, Memberships (the groups of the user), Created, Creator,
+                  LastUpdated, LastUpdatedBy and _hyperlinks. RT only returns the fields the current user is
+                  allowed to see.
 
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         :raises NotFoundError: If the user does not exist.
         """
         return self._dict_result(self._send('GET', _path('user', user_id)))
 
-    def user_exists(self, user_id: int | str, *, privileged: bool = True) -> bool:
+    def user_exists(self, user_id: int | str, *, privileged: bool) -> bool:
         """Check if a given user exists.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param user_id: Identification of user by username (str) or user ID (int).
-        :param privileged: If set to True, only return True if the user exists and is privileged.
+        :param privileged: True to only return True if the user exists and is privileged, False to return True
+                           for any existing user (also unprivileged ones, e.g. requestors). It must be specified, as
+                           RT also creates unprivileged users e.g. for everyone writing an email to RT.
         :returns: ``True`` if the user exists (and is privileged, if requested), else ``False``.
         """
         try:
@@ -1403,7 +1336,7 @@ class Rt:
         :param user_name: Username (login for privileged, required)
         :param email_address: Email address (required)
         :param kwargs: Optional fields to set (see edit_user)
-        :returns: ID of new user
+        :returns: The name of the new user, which RT returns as its ID (and which identifies it like its numeric ID).
         :raises BadRequestError: When user already exists
         :raises InvalidUseError: When invalid fields are set
         :raises UnexpectedResponseError: If the response from RT is not as expected
@@ -1459,8 +1392,11 @@ class Rt:
                           * Privileged
                           * Disabled
 
+                       RT (6.0.4) fails with HTTP status 500 (:py:exc:`~rt.exceptions.UnexpectedResponseError`) when
+                       changing the Password; it can be set when creating the user.
+
         :returns: List of status messages
-        :raises BadRequestError: When user does not exist
+        :raises NotFoundError: When the user does not exist
         :raises InvalidUseError: When invalid fields are set
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
@@ -1910,9 +1846,13 @@ class Rt:
                           * SLADisabled
                           * Lifecycle
                           * SortOrder
+                          * SubjectTag
+                          * CustomFields (custom fields of the queue itself, e.g. ``{'Region': 'EU'}``)
+                          * Cc, AdminCc (watchers of all tickets of the queue, a user name or email address or a list
+                            of them)
 
         :returns: List of status messages
-        :raises BadRequestError: When queue does not exist
+        :raises NotFoundError: When queue does not exist
         :raises InvalidUseError: When invalid fields are set
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
@@ -1950,7 +1890,7 @@ class Rt:
         """
         self._delete(_path('queue', queue_id))
 
-    def get_links(self, ticket_id: str | int) -> list[dict[str, str]]:
+    def get_links(self, ticket_id: str | int) -> list[dict[str, typing.Any]]:
         """Gets the ticket links for a single ticket.
 
         Example of a return result:
@@ -1969,21 +1909,15 @@ class Rt:
         .. note:: Requires RT 5.0.0 or newer.
 
         :param ticket_id: ticket ID
-        :returns: Links as lists of strings in dictionary with these keys
-                  (just those which are defined):
-
-                        * depends-on
-                        * depended-on-by
-                        * parent
-                        * child
-                        * refers-to
-                        * referred-to-by
+        :returns: The links of the ticket, each a dictionary with the keys ref (the kind of link: depends-on,
+                  depended-on-by, parent, child, refers-to or referred-to-by), type (ticket, or external for a link
+                  to a URL), _url and id (the ID of the linked ticket, only for tickets).
         :raises NotFoundError: If there is no ticket with the specified ticket_id.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         ticket = self.get_ticket(ticket_id)
 
-        return [link for link in ticket['_hyperlinks'] if link.get('type', '') == 'ticket' and link['ref'] != 'self']
+        return [link for link in ticket['_hyperlinks'] if link.get('ref') in _LINK_REFS]
 
     def edit_link(
         self,
@@ -2383,10 +2317,12 @@ class Rt:
 
         # copy the search parameters, so the list passed by the caller is not modified
         search_params = list(search_params or [])
-        if catalog_id:
-            search_params.append({'field': 'Catalog', 'value': catalog_id, 'operator': '='})
-        else:
-            search_params.append({'field': 'Catalog', 'value': '%', 'operator': 'LIKE'})
+        if catalog_id is not None:
+            # combined with AND also with conditions on Catalog, which RT would combine with OR by default
+            search_params.append({'field': 'Catalog', 'value': catalog_id, 'operator': '=', 'entry_aggregator': 'AND'})
+        elif not search_params:
+            # RT returns no asset for a search without a condition
+            search_params = [{'field': 'id', 'operator': '>', 'value': 0}]
 
         for item in self._paged_request('assets', json_data=search_params, params=get_params):
             yield item

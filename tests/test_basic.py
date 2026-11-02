@@ -423,7 +423,7 @@ def test_users(rt_connection: Rt):
     assert rt_connection.user_exists('root', privileged=True) is True
     assert rt_connection.user_exists('tester1@example.com', privileged=False) is True
     assert rt_connection.user_exists('tester1@example.com', privileged=True) is False
-    assert rt_connection.user_exists('does-not-exist@example.com') is False
+    assert rt_connection.user_exists('does-not-exist@example.com', privileged=False) is False
 
     random_user_name = f'username_{random_string()}'
     random_user_email = f'user-{random_string()}@example.com'

@@ -3,18 +3,24 @@ Usage
 
 REST API version 2
 -------------------
+The examples use the synchronous client ``rt.rest2.Rt``. The asynchronous client ``rt.rest2_async.AsyncRt`` has the
+same methods, see `Async Usage`_. The docstrings of the methods (see the API documentation) describe all parameters
+and state the minimum RT version each method requires.
 
 Creating a Connection
 `````````````````````
 All arguments of the constructor must be passed by keyword::
 
-    import rt.rest2
     import httpx2
+    import rt.rest2
 
-    api_url = 'http://localhost:8080/REST/2.0/'
+    api_url = 'https://rt.example.com/REST/2.0/'
     c = rt.rest2.Rt(url=api_url, http_auth=httpx2.BasicAuth('root', 'password'))
 
-Instead of ``http_auth``, an authentication token created in RT can be used with ``token='...'``.
+Instead of ``http_auth``, an authentication token created in RT (user preferences, *Auth Tokens*) can be used::
+
+    c = rt.rest2.Rt(url=api_url, token='1-14-ec2bd73b6f1b9a5d8f1ac4b8f0d5e7a1')
+
 Further optional arguments are ``proxy``, ``verify_cert`` (``False`` or the path to a CA bundle file),
 ``http_timeout`` (in seconds, default 20, ``None`` for no timeout) and ``per_page`` (number of items
 requested per page for results which are split into pages by RT, at most 100, which is the default).
@@ -38,260 +44,131 @@ pass your own ``httpx2.Client``. It is then used as it is, so ``proxy``, ``verif
     )
     c = rt.rest2.Rt(url=api_url, client=http_client)
 
+The requests and responses are logged with the logger ``rt.rest2`` (``rt.rest2_async`` for the async client) at
+level ``DEBUG``. Credentials in the request headers are redacted and request bodies are not logged::
 
-Ticket Operations
-`````````````````
+    import logging
 
-Fetching a ticket::
-
-    c.get_ticket(1)
-
-which gives:
-
-.. code-block:: json
-
-    {
-        "Due": "1970-01-01T00:00:00Z",
-        "Status": "new",
-        "Created": "2022-05-02T18:54:36Z",
-        "CustomFields": [],
-        "TimeEstimated": "0",
-        "LastUpdatedBy": {
-            "id": "root",
-            "type": "user",
-            "_url": "http://localhost:8080/REST/2.0/user/root"
-        },
-        "Type": "ticket",
-        "Owner": {
-            "id": "Nobody",
-            "_url": "http://localhost:8080/REST/2.0/user/Nobody",
-            "type": "user"
-        },
-        "Cc": [],
-        "Started": "1970-01-01T00:00:00Z",
-        "AdminCc": [],
-        "Priority": "0",
-        "LastUpdated": "2022-05-02T19:21:30Z",
-        "Subject": "Testing issue wvbocycTSwmNTAX",
-        "FinalPriority": "0",
-        "Queue": {
-            "id": "1",
-            "type": "queue",
-            "_url": "http://localhost:8080/REST/2.0/queue/1",
-            "Name": "General"
-        },
-        "InitialPriority": "0",
-        "Resolved": "1970-01-01T00:00:00Z",
-        "Creator": {
-            "type": "user",
-            "_url": "http://localhost:8080/REST/2.0/user/root",
-            "id": "root"
-        },
-        "EffectiveId": {
-            "_url": "http://localhost:8080/REST/2.0/ticket/8",
-            "type": "ticket",
-            "id": "8"
-        },
-        "Starts": "1970-01-01T00:00:00Z",
-        "TimeWorked": "0",
-        "TimeLeft": "0",
-        "Requestor": [],
-        "_hyperlinks": [
-            {
-                "id": 8,
-                "ref": "self",
-                "_url": "http://localhost:8080/REST/2.0/ticket/8",
-                "type": "ticket"
-            },
-            {
-                "ref": "history",
-                "_url": "http://localhost:8080/REST/2.0/ticket/8/history"
-            },
-            {
-                "_url": "http://localhost:8080/REST/2.0/ticket/8/correspond",
-                "ref": "correspond"
-            },
-            {
-                "ref": "comment",
-                "_url": "http://localhost:8080/REST/2.0/ticket/8/comment"
-            },
-            {
-                "ref": "lifecycle",
-                "update": "Respond",
-                "from": "new",
-                "label": "Open It",
-                "_url": "http://localhost:8080/REST/2.0/ticket/8/correspond",
-                "to": "open"
-            },
-            {
-                "label": "Resolve",
-                "to": "resolved",
-                "_url": "http://localhost:8080/REST/2.0/ticket/8/comment",
-                "ref": "lifecycle",
-                "update": "Comment",
-                "from": "new"
-            },
-            {
-                "to": "rejected",
-                "_url": "http://localhost:8080/REST/2.0/ticket/8/correspond",
-                "label": "Reject",
-                "from": "new",
-                "update": "Respond",
-                "ref": "lifecycle"
-            },
-            {
-                "ref": "lifecycle",
-                "label": "Delete",
-                "_url": "http://localhost:8080/REST/2.0/ticket/8",
-                "from": "new",
-                "to": "deleted"
-            }
-        ],
-        "id": 8
-    }
+    logging.basicConfig()
+    logging.getLogger('rt.rest2').setLevel(logging.DEBUG)
 
 
-Getting ticket links::
+Results, Messages and Errors
+````````````````````````````
+Methods returning a single object return it as dictionary, as returned by RT. Methods returning several objects,
+e.g. searches, return iterators: RT returns the results in pages, which are requested as needed while iterating.
+Use ``list()`` to get all results at once::
 
-    c.get_links(1)
+    tickets = list(c.search(queue='General', Status='new'))
 
-for a ticket with #1 having ticket #7 as parent, this would have as result:
-
-.. code-block:: json
-
-    [
-        {
-            "_url": "http://localhost:8080/REST/2.0/ticket/7",
-            "type": "ticket",
-            "ref": "parent",
-            "id": "7"
-        }
-    ]
-
-Editing ticket links. Adding a dependency on another ticket::
-
-    c.edit_link(1, 'DependsOn', 7)
-
-and removing it again::
-
-    c.edit_link(1, 'DependsOn', 7, delete=True)
-
-Creating a ticket::
-
-    new_ticket = {'Requestor': ['test@example.com'],
-                  }
-    res = c.create_ticket('General',
-                          subject='Test subject',
-                          content='Ticket body...',
-                          **new_ticket
-                          )
-
-This returns the ID of the created ticket.
-
-Editing a ticket::
-
-    c.edit_ticket(8,
-                  Subject='Re: Test subject',
-                  CustomFields={'CF1': 'value1',
-                                ...
-                                }
-                  )
+Searches and lists return a few fields of each object by default; other fields are selected with ``fields``, e.g.
+``fields=['Name', 'Description']``, or with a dictionary of query parameters as defined by RT, which also allows to
+return fields of linked objects, e.g. ``fields={'fields': 'Owner', 'fields[Owner]': 'Name,EmailAddress'}``.
 
 Methods changing something return the status messages of RT, e.g.
 ``["Ticket 8: Subject changed from 'Test subject' to 'Re: Test subject'"]``. If RT refuses the change,
 an exception is raised instead, e.g. :py:exc:`~rt.exceptions.InvalidUseError` when taking a ticket which is
-already owned by the user. ``edit_ticket()`` and similar methods are an exception: RT reports invalid values
-of single fields only in the returned messages (e.g. ``"Ticket 8: Status 'x' isn't a valid status for this ticket."``),
-while the other fields are changed anyway.
+already owned by the user. ``edit_ticket()`` and the other ``edit_*()`` methods are an exception: RT reports invalid
+values of single fields only in the returned messages (e.g.
+``"Ticket 8: Status 'x' isn't a valid status for this ticket."``), while the other fields are changed anyway.
 
-All optional arguments of the methods must be passed by keyword.
+All exceptions raised by the library are subclasses of :py:exc:`rt.exceptions.RtError`:
 
-The docstrings of the methods state the minimum RT version they require.
+* :py:exc:`~rt.exceptions.NotFoundError`: the ticket, user, queue etc. does not exist.
+* :py:exc:`~rt.exceptions.AuthorizationError`: the credentials are invalid.
+* :py:exc:`~rt.exceptions.NotAllowedError`: the user does not have the rights for the request.
+* :py:exc:`~rt.exceptions.BadRequestError`: RT rejected the request, e.g. an invalid TicketSQL query.
+* :py:exc:`~rt.exceptions.ConflictError`: the request conflicts with the state in RT, e.g. a right is already
+  granted. It is a subclass of :py:exc:`~rt.exceptions.UnexpectedResponseError`.
+* :py:exc:`~rt.exceptions.InvalidUseError`: invalid arguments, e.g. an unsupported search operator, or RT
+  refused the action, e.g. merging a ticket into itself. It is also a builtin ``ValueError``.
+* :py:exc:`~rt.exceptions.UnexpectedResponseError`: the response is not as expected, e.g. an unexpected
+  status code or an HTML page returned by a proxy instead of RT.
+* :py:exc:`~rt.exceptions.RtConnectionError`: RT can not be reached. It is also a builtin ``ConnectionError``.
+
+Exceptions caused by an HTTP response of RT carry its status code and body in the attributes ``status_code``
+and ``response_message``::
+
+    import rt.exceptions
+
+    try:
+        c.take(1)
+    except rt.exceptions.NotFoundError:
+        print('No such ticket')
+    except rt.exceptions.InvalidUseError as exc:
+        print(f'RT refused: {exc}')  # e.g. "You already own this ticket"
 
 
-Searching for tickets with status *new* in the *General* queue::
+Tickets
+```````
+Creating a ticket returns its ID. Requestors, watchers, custom fields and custom roles are set with the field
+names of RT::
 
-    list(c.search(queue='General', Status='new'))
+    ticket_id = c.create_ticket(
+        'General',
+        subject='Printer out of order',
+        content='The printer in room 2 does not print.',
+        Requestor=['alice@example.com'],
+        CustomFields={'Severity': 'High'},
+    )
 
-gives:
+Creating a ticket with an attachment::
 
-.. code-block:: python
+    from rt.common import Attachment
 
-    [
-        {
-            "type": "ticket",
-            "InitialPriority": "0",
-            "CustomFields": "",
-            "TimeEstimated": "0",
-            "Due": "1970-01-01T00:00:00Z",
-            "Priority": "0",
-            "Status": "new",
-            "Created": "2022-05-02T18:54:35Z",
-            "Queue": {
-                "Name": "General",
-                "type": "queue",
-                "_url": "http://localhost:8080/REST/2.0/queue/1",
-                "id": "1"
-            },
-            "Subject": "Testing issue SsOwRvDXMGnurhU",
-            "LastUpdated": "2022-05-02T20:44:02Z",
-            "TimeLeft": "0",
-            "Owner": {
-                "id": "Nobody",
-                "_url": "http://localhost:8080/REST/2.0/user/Nobody",
-                "type": "user"
-            },
-            "Started": "1970-01-01T00:00:00Z",
-            "Requestor": [],
-            "Cc": [],
-            "AdminCc": [],
-            "id": "7",
-            "_url": "http://localhost:8080/REST/2.0/ticket/7",
-            "Type": "ticket"
-        },
-        ...
-    ]
+    with open('error.log', 'rb') as file:
+        attachment = Attachment('error.log', 'text/plain', file.read())
+    ticket_id = c.create_ticket('General', subject='Crash', content='See the log.', attachments=[attachment])
 
-Do a reply on a ticket::
+Fetching a ticket; fields of linked objects (e.g. the name and email address of the owner) are returned with
+``fields``::
 
-    c.reply(1, content='test')
+    ticket = c.get_ticket(ticket_id, fields={'fields[Owner]': 'Name,EmailAddress'})
+    print(ticket['Subject'], ticket['Status'], ticket['Queue']['Name'], ticket['Owner']['EmailAddress'])
 
-Comment on a ticket::
+Changing fields, e.g. resolving the ticket, assigning it, or changing custom fields::
 
-    c.comment(1, content='test')
+    c.edit_ticket(ticket_id, Status='resolved')
+    c.edit_ticket(ticket_id, Owner='alice', Priority=50, CustomFields={'Severity': 'Low'})
 
-Merge ticket #1 into #2::
+Taking, untaking or stealing a ticket (stealing is only possible for tickets owned by another user)::
 
-    c.merge_ticket(1, 2)
+    c.take(ticket_id)
+    c.untake(ticket_id)
+    c.steal(ticket_id)
 
-Take, untake or steal a ticket (stealing is only possible for tickets owned by another user)::
+Replying to a ticket (sent to the requestors) and commenting on it (not sent to the requestors), in ``text/plain``
+(default) or ``text/html``, optionally with attachments::
 
-    c.take(1)
-    c.untake(1)
-    c.steal(1)
+    c.reply(ticket_id, 'We will replace the toner today.')
+    c.comment(ticket_id, '<p>Toner ordered.</p>', content_type='text/html', attachments=[attachment])
 
-Comment on a ticket and add an attachment::
+Replies and comments can also set the subject of the message, record the time worked, and change the status,
+custom fields and custom roles of the ticket and the custom fields of the transaction in the same request. RT sets
+these after adding the message and reports refused values only in the returned messages::
 
-    with open('README.rst', 'rb') as fhdl:
-        attachment = rt.rest2.Attachment('README.rst', 'text/plain', fhdl.read())
-    c.comment(1, 'test', attachments=[attachment])
+    c.reply(ticket_id, 'Fixed, please check.', time_taken=15, status='resolved', custom_fields={'Severity': 'Low'})
 
-``reply()`` and ``comment()`` accept the content types ``text/plain`` (default) and ``text/html``::
+Links between tickets, and to URLs::
 
-    c.reply(1, content='<p>test</p>', content_type='text/html')
+    c.edit_link(ticket_id, 'DependsOn', 7)
+    c.edit_link(ticket_id, 'RefersTo', 'https://wiki.example.com/printers')
+    c.edit_link(ticket_id, 'DependsOn', 7, delete=True)
+    for link in c.get_links(ticket_id):
+        print(link['ref'], link['type'], link['_url'])  # e.g. "refers-to external https://wiki.example.com/printers"
 
-They can also set the subject of the message, record the time worked, and change the status, custom fields and
-custom roles of the ticket and the custom fields of the transaction in the same request::
+Merging a ticket into another one, and deleting a ticket (RT sets its status to *deleted*)::
 
-    c.reply(1, 'Fixed, please check.', time_taken=15, status='resolved', custom_fields={'Severity': 'Low'})
+    c.merge_ticket(ticket_id, 7)
+    c.delete_ticket(8)
 
-RT sets these after adding the message and reports refused values only in the returned messages, e.g. an
-invalid status.
 
+Messages, History and Attachments
+`````````````````````````````````
 The messages of a ticket (its creation, replies and comments) with their text and author, oldest first, in one
 request per 100 messages::
 
-    for message in c.get_ticket_messages(1):
+    for message in c.get_ticket_messages(ticket_id):
         print(message['Created'], message['Creator']['Name'], message['Type'], message['Content'])
 
 All transactions of a ticket, also e.g. status changes, are returned by ``get_ticket_history()``, a single
@@ -300,32 +177,20 @@ TransactionSQL query (RT 5.0.2 or newer)::
 
     c.search_transactions(raw_query="Type = 'Comment' AND Created > '2024-01-01'", fields=['Type', 'Content'])
 
+The files attached to a ticket, and the content of a file (RT returns it base64 encoded)::
 
-Get attachments for a ticket::
+    import base64
 
-    list(c.get_attachments(1))
+    for attachment in c.get_attachments(ticket_id):
+        print(attachment['id'], attachment['Filename'], attachment['ContentType'], attachment['ContentLength'])
+        content = base64.b64decode(c.get_attachment(attachment['id'])['Content'])
 
-returns:
+The files of a single reply or comment, e.g. of a message returned by ``get_ticket_messages()``::
 
-.. code-block:: json
+    c.get_attachments(ticket_id, search_params=[{'field': 'TransactionId', 'value': message['id']}])
 
-    [
-        {
-            "type": "attachment",
-            "_url": "http://localhost:8080/REST/2.0/attachment/34",
-            "Filename": "README.rst",
-            "ContentType": "text/plain",
-            "id": "34",
-            "ContentLength": "3578"
-        }
-    ]
-
-Fetch an attachment by its ID::
-
-    c.get_attachment(34)
-
-Search files across all tickets, e.g. by name, content type or creation time (RT only returns those the user is
-allowed to see)::
+Files are searched across all tickets, e.g. by name, content type or creation time (RT only returns those the user
+is allowed to see)::
 
     c.search_attachments(search_params=[{'field': 'ContentType', 'value': 'application/pdf'},
                                         {'field': 'Created', 'operator': '>', 'value': '2024-01-01'}])
@@ -333,8 +198,8 @@ allowed to see)::
 
 Searching Tickets
 `````````````````
-``search()`` returns an iterator over the matching tickets; RT returns the results in pages, which are requested
-as needed while iterating. Conditions are passed as keyword arguments, which are combined with ``AND``::
+``search()`` returns an iterator over the matching tickets. Conditions are passed as keyword arguments, which are
+combined with ``AND``::
 
     for ticket in c.search(queue='General', Status='open', Owner='Nobody'):
         print(ticket['id'], ticket['Subject'])
@@ -345,7 +210,7 @@ Conditions can also be passed as a mapping with ``conditions``, e.g. for field n
 identifiers or conditions built at runtime. Unlike unpacking a dictionary with ``**``, this is accepted by type
 checkers like mypy. Both forms can be combined, but a condition must not be given in both::
 
-    c.search(queue='General', conditions={'CF_Contact Email': 'a@example.com'}, Status='open')
+    c.search(queue='General', conditions={'CF_Contact Email': 'a@example.com', 'Requestor.EmailAddress': 'b@example.com'}, Status='open')
 
 Other operators than ``=`` are used by appending them to the field name, e.g. ``Subject__like='coffee'``:
 
@@ -370,32 +235,61 @@ For example, all open tickets with a priority of at least 50 which are not resol
 
     c.search(queue='General', Status='open', Priority__gte=50, Resolved__is=None)
 
-All values are quoted, so they can not change the meaning of the query. A complete TicketSQL query can be passed
-with ``raw_query`` instead; it is passed to RT as is, so it must never contain untrusted input::
+All values are quoted, so they can not change the meaning of the query; field names other than plain names like
+``Subject`` or ``Requestor.EmailAddress`` are quoted as well, e.g. ``conditions={'CustomRole.{Manager}': 'alice'}``.
 
-    c.search(queue='General', raw_query="Status = 'new' OR Status = 'open'")
+A complete TicketSQL query can be passed with ``raw_query`` instead of conditions (``queue`` and ``order`` can still
+be used); it is passed to RT as is, so it must never contain untrusted input::
+
+    c.search(queue='General', raw_query="Status = 'new' OR Status = 'open'", order='-Created')
+
+The query is sent in the body of a POST request, so it is not limited by the maximum length of URLs.
 
 The fields returned for each ticket are selected with ``fields``: ``'l'`` (default, many fields),
-``'s'`` (ID and subject), ``'i'`` (only the ID), or a list of fields::
+``'s'`` (ID and subject), ``'i'`` (only the ID), a list of fields, or a dictionary of query parameters::
 
     c.search(queue='General', fields=['Subject', 'Status'])
 
-Tickets updated recently::
+Tickets updated recently, and tickets updated by other users than the one of the connection::
 
     import datetime
 
     since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
     for ticket in c.last_updated(since, queue='General'):
         print(ticket['id'])
+    for ticket in c.new_correspondence(queue='General'):
+        print(ticket['id'])
 
 A ``datetime`` with timezone is an exact point in time. Dates, naive datetimes and strings like ``'2024-01-31'``
 or ``'2024-01-31 12:00:00'`` are interpreted by RT in the timezone of the RT user.
 
 
+Queues
+``````
+Queues are identified by name or ID::
+
+    queue = c.get_queue('General')
+    for queue in c.get_all_queues():
+        print(queue['id'], queue['Name'])
+    c.search_queues(search_params=[{'field': 'Name', 'operator': 'LIKE', 'value': 'Support'}])
+
+    queue_id = c.create_queue('Support', Description='First level support', SubjectTag='support')
+    c.edit_queue('Support', CorrespondAddress='support@example.com', AdminCc='alice')
+    c.delete_queue('Support')  # disables the queue
+
+
 Users and Groups
 ````````````````
-Users and groups are searched with conditions like assets (all if none are given), e.g. the privileged users
-of a domain::
+Users are identified by name or ID::
+
+    user = c.get_user('alice')
+    c.create_user('bob', 'bob@example.com', RealName='Bob Example', Password='secret', Privileged=1)
+    c.edit_user('bob', Organization='Example Inc.', Disabled=0)
+    c.user_exists('bob', privileged=False)
+    c.delete_user('bob')  # disables the user
+
+Users and groups are searched with conditions like the ones of assets (all if none are given), e.g. the privileged
+users of a domain::
 
     c.search_users(search_params=[{'field': 'EmailAddress', 'operator': 'LIKE', 'value': '@example.com'}],
                    privileged=True)
@@ -426,7 +320,7 @@ The custom fields applied to a queue::
 Files are set as value of an Image or Binary custom field with an :py:class:`~rt.common.Attachment`, and read
 with the ID which is the last part of the ``_url`` of the value in the ticket::
 
-    c.edit_ticket(8, CustomFields={'Screenshot': Attachment('screen.png', 'image/png', content).to_dict()})
+    c.edit_ticket(ticket_id, CustomFields={'Screenshot': Attachment('screen.png', 'image/png', content).to_dict()})
     content = c.get_custom_field_file(value_id)
 
 
@@ -456,12 +350,18 @@ Catalogs are created, edited and disabled like queues::
     for catalog in c.get_all_catalogs():
         print(catalog['Name'])
 
+Assets are created in a catalog, edited, and marked as deleted::
+
+    asset_id = c.create_asset('Laptop 42', 'Laptops', Description='ThinkPad', HeldBy='alice')
+    c.edit_asset(asset_id, Status='in-use')
+    c.delete_asset(asset_id)
+
 Assets are searched with conditions, or with an AssetSQL query (RT 5.0.2 or newer), which is passed to RT as is::
 
+    c.search_assets(catalog_id=catalog_id, search_params=[{'field': 'Name', 'operator': 'LIKE', 'value': 'Laptop'}])
     c.search_assets(raw_query="Catalog = 'Laptops' AND Status = 'in-use'")
 
-RT ignores an invalid AssetSQL query and then returns all assets. ``delete_asset()`` marks an asset as deleted
-by setting its status, as RT does not delete assets.
+RT ignores an invalid AssetSQL query and then returns all assets.
 
 
 Articles and Classes
@@ -474,51 +374,22 @@ Articles (RT 5.0.1 or newer) belong to a class, their text is stored in the cust
     for article in c.search_articles(search_params=[{'field': 'Class', 'value': class_id}]):
         print(article['Name'], article['Summary'])
 
-Queues are searched with ``search_queues()``, custom roles read with ``search_custom_roles()`` and
-``get_custom_role()`` (REST2 can not create or change them).
-
-
-Error Handling
-``````````````
-All exceptions raised by the library are subclasses of :py:exc:`rt.exceptions.RtError`, e.g.:
-
-* :py:exc:`~rt.exceptions.NotFoundError`: the ticket, user, queue etc. does not exist.
-* :py:exc:`~rt.exceptions.AuthorizationError`: the credentials are invalid.
-* :py:exc:`~rt.exceptions.NotAllowedError`: the user does not have the rights for the request.
-* :py:exc:`~rt.exceptions.BadRequestError`: RT rejected the request.
-* :py:exc:`~rt.exceptions.ConflictError`: the request conflicts with the state in RT, e.g. a right is already
-  granted. It is a subclass of :py:exc:`~rt.exceptions.UnexpectedResponseError`.
-* :py:exc:`~rt.exceptions.InvalidUseError`: invalid arguments, e.g. an unsupported search operator, or RT
-  refused the action, e.g. merging a ticket into itself. It is also a builtin ``ValueError``.
-* :py:exc:`~rt.exceptions.UnexpectedResponseError`: the response is not as expected, e.g. an unexpected
-  status code or an HTML page returned by a proxy instead of RT.
-* :py:exc:`~rt.exceptions.RtConnectionError`: RT can not be reached. It is also a builtin ``ConnectionError``.
-
-Exceptions caused by an HTTP response of RT carry its status code and body in the attributes ``status_code``
-and ``response_message``.
-
-::
-
-    import rt.exceptions
-
-    try:
-        c.get_ticket(1)
-    except rt.exceptions.NotFoundError:
-        print('No such ticket')
+Custom roles are read with ``search_custom_roles()`` and ``get_custom_role()`` (REST2 can not create or change them).
 
 
 Async Usage
 ```````````
 ``rt.rest2_async.AsyncRt`` provides the same methods as ``rt.rest2.Rt`` as coroutines. Methods returning
-multiple results are async iterators::
+multiple results are async iterators, which are iterated without ``await``::
 
-    import rt.rest2_async
     import httpx2
+    import rt.rest2_async
 
     async with rt.rest2_async.AsyncRt(url=api_url, http_auth=httpx2.BasicAuth('root', 'password')) as c:
         ticket = await c.get_ticket(1)
         async for ticket in c.search(queue='General', Status='open'):
             print(ticket['id'])
+        tickets = [ticket async for ticket in c.search(queue='General')]
 
 An own ``httpx2.AsyncClient`` can be passed with ``client``, and the client is closed with ``await c.aclose()``.
 

@@ -492,6 +492,8 @@ class Rt:
     def new_correspondence(self, *, queue: str | None = None) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Obtains tickets changed by other users than the one used for the connection.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param queue: Queue where to search
 
         :returns: Iterator of tickets which were last updated by another user than
@@ -509,6 +511,8 @@ class Rt:
         queue: str | None = None,
     ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Obtains tickets changed after given date.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param since: Date and optionally time after which the tickets were changed:
 
@@ -563,6 +567,8 @@ class Rt:
             >>> tickets = list(tracker.search(CF_Domain='example.com', Subject__like='warning'))
             >>> tickets = list(tracker.search(conditions={'CF_Contact Email': 'a@example.com', 'Status': 'open'}))
             >>> tickets = list(tracker.search(queue='General', order='Status', raw_query="id='1'+OR+id='2'+OR+id='3'"))
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param queue:      Queue where to search. If you wish to search across
                            all of your queues, pass None as the argument.
@@ -657,6 +663,8 @@ class Rt:
     def get_ticket(self, ticket_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Fetch ticket by its ID.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param ticket_id: ID of demanded ticket
         :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
                        ``{'fields[Owner]': 'Name,EmailAddress'}``. RT always returns all fields of
@@ -718,6 +726,8 @@ class Rt:
               "CustomFields": {"Severity": "Low"}
             }
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param queue: Queue where to create ticket
         :param subject: Optional subject for the ticket.
         :param content: Optional content of the ticket. Must be specified unless attachments are specified.
@@ -753,6 +763,8 @@ class Rt:
     def edit_ticket(self, ticket_id: str | int, **kwargs: JSONInput) -> list[str]:
         """Edit ticket values.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param ticket_id: ID of ticket to edit
         :param kwargs: Fields to set, e.g. Requestor, Subject, Cc, AdminCc, Owner, Status,
                        Priority, InitialPriority, FinalPriority, TimeEstimated, Starts, Due
@@ -776,6 +788,8 @@ class Rt:
     def get_ticket_history(self, ticket_id: str | int) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Get set of short history items.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param ticket_id: ID of ticket
         :returns: Iterator of history items ordered increasingly by time of event.
                   Each history item is a dictionary with the keys Type, Creator,
@@ -792,6 +806,8 @@ class Rt:
 
     def get_transaction(self, transaction_id: str | int) -> dict[str, typing.Any]:
         """Get a transaction.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param transaction_id: ID of transaction
         :returns: The transaction as dictionary.
@@ -855,6 +871,8 @@ class Rt:
         """Sends email message to the contacts in ``Requestors`` field of
         given ticket with subject as is set in ``Subject`` field.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param ticket_id: ID of ticket to which message belongs
         :param content: Content of email message (text/plain or text/html)
         :param content_type: Content type of email message, default to text/plain
@@ -874,6 +892,8 @@ class Rt:
     def delete_ticket(self, ticket_id: str | int) -> None:
         """Mark a ticket as deleted.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param ticket_id: ID of ticket
         :raises NotFoundError: If the ticket does not exist.
         :raises BadRequestError: If RT rejects the request.
@@ -890,6 +910,8 @@ class Rt:
         attachments: typing.Sequence[Attachment] | None = None,
     ) -> list[str]:
         """Adds comment to the given ticket.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param ticket_id: ID of ticket to which comment belongs
         :param content: Content of comment
@@ -931,6 +953,9 @@ class Rt:
                 }
             ]
 
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
         :param ticket_id: ID of ticket
         :param query_filter: JSON search filter, defaults to "filename is not empty"
         :param fields: Fields returned for each attachment: a comma separated string or list of fields,
@@ -958,6 +983,9 @@ class Rt:
     ) -> collections.abc.Iterator[int]:
         """Get IDs of attachments for given ticket.
 
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
         :param ticket_id: ID of ticket
         :param query_filter: JSON search filter, defaults to "filename is not empty"
         :returns: Iterator of IDs (type int) of attachments belonging to given
@@ -977,6 +1005,8 @@ class Rt:
 
     def get_attachment(self, attachment_id: str | int) -> dict[str, typing.Any]:
         """Get attachment.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param attachment_id: ID of attachment to fetch
         :returns: Attachment as dictionary with these keys:
@@ -1031,6 +1061,8 @@ class Rt:
     def get_user(self, user_id: int | str) -> dict[str, typing.Any]:
         """Get user details.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param user_id: Identification of user by username (str) or user ID
                         (int)
         :returns: User details as strings in dictionary with these keys for RT
@@ -1064,6 +1096,8 @@ class Rt:
     def user_exists(self, user_id: int | str, *, privileged: bool = True) -> bool:
         """Check if a given user exists.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param user_id: Identification of user by username (str) or user ID (int).
         :param privileged: If set to True, only return True if the user exists and is privileged.
         :returns: ``True`` if the user exists (and is privileged, if requested), else ``False``.
@@ -1081,6 +1115,8 @@ class Rt:
 
     def create_user(self, user_name: str, email_address: str, **kwargs: JSONInput) -> str:
         """Create user.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param user_name: Username (login for privileged, required)
         :param email_address: Email address (required)
@@ -1104,6 +1140,8 @@ class Rt:
 
     def edit_user(self, user_id: str | int, **kwargs: JSONInput) -> list[str]:
         """Edit user profile.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param user_id: Identification of user by username (str) or user ID
                         (int)
@@ -1150,6 +1188,8 @@ class Rt:
 
     def delete_user(self, user_id: str | int) -> None:
         """Disable a user.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param user_id: Identification of a user by name (str) or ID (int)
         :raises NotFoundError: If the user does not exist.
@@ -1494,6 +1534,8 @@ class Rt:
                 "id": 1
             }
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param queue_id: Identification of queue by name (str) or queue ID
                          (int)
         :returns: Queue details as a dictionary
@@ -1525,6 +1567,8 @@ class Rt:
                 }
             ]
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param include_disabled: Set to True to also return disabled queues.
 
         :returns: Iterator of dictionaries containing basic information on all queues.
@@ -1540,6 +1584,8 @@ class Rt:
 
     def edit_queue(self, queue_id: str | int, **kwargs: JSONInput) -> list[str]:
         """Edit queue.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param queue_id: Identification of queue by name (str) or ID (int)
         :param kwargs: Other fields to edit from the following list:
@@ -1565,6 +1611,8 @@ class Rt:
     def create_queue(self, name: str, **kwargs: JSONInput) -> int:
         """Create queue.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param name: Queue name (required)
         :param kwargs: Optional fields to set (see edit_queue)
         :returns: ID of new queue
@@ -1580,6 +1628,8 @@ class Rt:
 
     def delete_queue(self, queue_id: str | int) -> None:
         """Disable a queue.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param queue_id: Identification of queue by name (str) or ID (int)
         :raises NotFoundError: If the queue does not exist.
@@ -1603,6 +1653,8 @@ class Rt:
                     "ref": "depends-on"
                 }
             ]
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param ticket_id: ticket ID
         :returns: Links as lists of strings in dictionary with these keys
@@ -1630,6 +1682,8 @@ class Rt:
         delete: bool = False,
     ) -> list[str]:
         """Creates or deletes a link between the specified tickets.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param ticket_id: ID of ticket to edit
         :param link_name: Name of link to edit ('Parent', 'Child', 'RefersTo',
@@ -1666,6 +1720,8 @@ class Rt:
 
     def merge_ticket(self, ticket_id: str | int, into_id: str | int) -> list[str]:
         """Merge ticket into another.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param ticket_id: ID of ticket to be merged
         :param into_id: ID of destination ticket
@@ -1710,6 +1766,9 @@ class Rt:
     def take(self, ticket_id: str | int) -> list[str]:
         """Take ticket.
 
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
         :param ticket_id: ID of ticket to be taken
         :returns: Status messages of RT, e.g. ``['Owner changed from Nobody to root']``.
         :raises InvalidUseError: If RT refused to change the owner, e.g. if the user already owns the ticket.
@@ -1721,6 +1780,9 @@ class Rt:
 
     def untake(self, ticket_id: str | int) -> list[str]:
         """Untake ticket.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param ticket_id: ID of ticket to be untaken
         :returns: Status messages of RT, e.g. ``['Owner changed from root to Nobody']``.
@@ -1734,6 +1796,9 @@ class Rt:
     def steal(self, ticket_id: str | int) -> list[str]:
         """Steal ticket.
 
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
         :param ticket_id: ID of ticket to be stolen
         :returns: Status messages of RT, e.g. ``['Owner changed from Nobody to root']``.
         :raises InvalidUseError: If RT refused to change the owner, e.g. if the ticket is not owned by another user.
@@ -1745,6 +1810,8 @@ class Rt:
 
     def get_catalog(self, catalog_id: str | int) -> dict[str, typing.Any]:
         """Get catalog.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param catalog_id: Identification of catalog by name (str) or ID (int).
         :returns: Catalog as dictionary with these keys:
@@ -1769,6 +1836,8 @@ class Rt:
 
     def get_asset(self, asset_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get asset.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param asset_id: Asset ID.
         :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
@@ -1800,6 +1869,8 @@ class Rt:
     def create_asset(self, name: str, catalog: str | int, **kwargs: JSONInput) -> int:
         """Create a new asset in a catalog.
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param name: Asset name.
         :param catalog: Catalog name or ID.
         :param kwargs: Other fields to set, e.g. Description, Status, CustomFields, RefersTo.
@@ -1815,6 +1886,8 @@ class Rt:
 
     def edit_asset(self, asset_id: str | int, **kwargs: JSONInput) -> list[str]:
         """Edit an existing asset.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param asset_id: Asset ID.
         :param kwargs: Fields to set, e.g. Name, Description, Status, CustomFields, RefersTo.
@@ -1852,6 +1925,8 @@ class Rt:
                 'type': 'asset'
             }
 
+        .. note:: Requires RT 5.0.0 or newer.
+
         :param catalog_id: Catalog ID. Use `None` to search all catalogs.
         :param search_params: Params used to filter the results. Each param is a dictionary with the keys:
 
@@ -1877,6 +1952,8 @@ class Rt:
 
     def get_asset_history(self, asset_id: str | int) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Get asset history.
+
+        .. note:: Requires RT 5.0.0 or newer.
 
         :param asset_id: Asset ID.
         :returns: Iterator of transactions, each a dictionary with the keys

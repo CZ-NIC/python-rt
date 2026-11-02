@@ -7,7 +7,7 @@ The sync tests (test_tickets.py) are generated from the async tests (test_ticket
 
 from rt.rest2 import Rt
 
-# ruff: noqa: S101
+# ruff: noqa: S101, S106
 
 __license__ = """ Copyright (C) 2013 CZ.NIC, z.s.p.o.
     Copyright (c) 2021 CERT Gouvernemental (GOVCERT.LU)
@@ -291,3 +291,79 @@ def test_search_transactions_invalid_use(arguments: dict[str, typing.Any]):
     with Rt(url=RT_URL, client=httpx2.Client(transport=httpx2.MockTransport(no_request))) as tracker:
         with pytest.raises(rt.exceptions.InvalidUseError):
             [item for item in tracker.search_transactions(**arguments)]
+
+
+# --- attachment search ---------------------------------------------------------------------------------------------
+
+
+def test_search_attachments(rt_connection: Rt):
+    prefix = f'search-{random_string()}'
+    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Attachment search', content='Test')
+    rt_connection.comment(
+        ticket_id,
+        'Files',
+        attachments=[Attachment(f'{prefix}-a.pdf', 'application/pdf', b'%PDF-1.4'), Attachment(f'{prefix}-b.txt', 'text/plain', b'text')],
+    )
+    rt_connection.comment(ticket_id, 'Another file', attachments=[Attachment(f'{prefix}-c.txt', 'text/plain', b'more')])
+    by_prefix = [{'field': 'Filename', 'operator': 'LIKE', 'value': prefix}]
+
+    found = [item for item in rt_connection.search_attachments(search_params=by_prefix)]
+    assert sorted(item['Filename'] for item in found) == [f'{prefix}-a.pdf', f'{prefix}-b.txt', f'{prefix}-c.txt']
+    assert {'Filename', 'ContentType', 'ContentLength', 'TransactionId', 'Created'} <= set(found[0])
+
+    pdfs = [item['Filename'] for item in rt_connection.search_attachments(search_params=[*by_prefix, {'field': 'ContentType', 'value': 'application/pdf'}])]
+    assert pdfs == [f'{prefix}-a.pdf']
+
+    # conditions on the file name stay combined with OR, although only files are returned
+    either = [{'field': 'Filename', 'value': f'{prefix}-a.pdf'}, {'field': 'Filename', 'value': f'{prefix}-c.txt'}]
+    assert sorted([item['Filename'] for item in rt_connection.search_attachments(search_params=either)]) == [f'{prefix}-a.pdf', f'{prefix}-c.txt']
+
+    # the files of a single comment, with search_attachments and with get_attachments as in its docstring
+    transaction_id = next(item['TransactionId'] for item in found if item['Filename'] == f'{prefix}-c.txt')
+    of_transaction = [{'field': 'TransactionId', 'value': transaction_id}]
+    assert [item['Filename'] for item in rt_connection.search_attachments(search_params=of_transaction)] == [f'{prefix}-c.txt']
+    query_filter = [*of_transaction, {'field': 'Filename', 'operator': 'IS NOT', 'value': ''}]
+    assert [item['Filename'] for item in rt_connection.get_attachments(ticket_id, query_filter=query_filter)] == [f'{prefix}-c.txt']
+
+    # all parts of the message: the container, the text of the message and the file
+    parts = [item for item in rt_connection.search_attachments(search_params=of_transaction, files_only=False)]
+    assert len(parts) == 3
+    assert sorted(item['Filename'] for item in parts) == ['', '', f'{prefix}-c.txt']
+
+
+def test_search_attachments_rights(rt_connection: Rt):
+    prefix = f'rights-{random_string()}'
+    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Attachment rights', content='Test')
+    rt_connection.comment(ticket_id, 'File', attachments=[Attachment(f'{prefix}.txt', 'text/plain', b'secret')])
+    user_name = f'user-{random_string()}'
+    rt_connection.create_user(user_name, f'{user_name}@example.com', Password='password-of-test-user', Privileged=1)
+    condition = [{'field': 'Filename', 'value': f'{prefix}.txt'}]
+
+    assert len([item for item in rt_connection.search_attachments(search_params=condition)]) == 1
+    with Rt(url=RT_URL, http_auth=httpx2.BasicAuth(user_name, 'password-of-test-user'), http_timeout=None) as tracker:
+        assert [item for item in tracker.search_attachments(search_params=condition)] == []
+
+
+def test_search_attachments_conditions():
+    conditions: list[typing.Any] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        conditions.append(json.loads(request.content))
+        return httpx2.Response(200, json={'page': 1, 'per_page': 100, 'pages': 0, 'total': 0, 'count': 0, 'items': []})
+
+    files_only = {'field': 'Filename', 'operator': 'IS NOT', 'value': '', 'entry_aggregator': 'AND'}
+    search_params = [{'field': 'Filename', 'value': 'a.pdf'}]
+    with Rt(url=RT_URL, client=httpx2.Client(transport=httpx2.MockTransport(handler))) as tracker:
+        [item for item in tracker.search_attachments()]
+        [item for item in tracker.search_attachments(search_params=search_params)]
+        [item for item in tracker.search_attachments(files_only=False)]
+        [item for item in tracker.search_attachments(search_params=search_params, files_only=False)]
+
+    assert conditions == [
+        [files_only],
+        [{'field': 'Filename', 'value': 'a.pdf'}, files_only],
+        [{'field': 'id', 'operator': '>', 'value': 0}],
+        [{'field': 'Filename', 'value': 'a.pdf'}],
+    ]
+    # the list passed by the caller is not modified
+    assert search_params == [{'field': 'Filename', 'value': 'a.pdf'}]

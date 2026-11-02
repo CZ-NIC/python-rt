@@ -250,6 +250,9 @@ Python 3.11 or newer is required.
 - REST2 `get_ticket_messages()` returns the creation, replies and comments of a ticket with their text and author in
   one request per 100 messages, instead of `get_ticket_history()` followed by `get_transaction()` for each entry
   (both remain available).
+- REST2 `search_attachments()` searches files (or with `files_only=False` all parts of messages) across all
+  tickets, e.g. by name, content type or creation time. The docstring of `get_attachments()` shows how to get the
+  files of a single reply or comment.
 - REST2 `search_queues()` searches queues, `search_custom_roles()` and `get_custom_role()` read custom roles.
 - REST2 classes and articles (RT 5.0.1 or newer): `get_all_classes()`, `search_classes()`, `get_class()`,
   `create_class()`, `edit_class()`, `delete_class()`, `search_articles()`, `get_article()`, `create_article()`,

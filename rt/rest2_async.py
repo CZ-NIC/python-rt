@@ -485,6 +485,37 @@ class AsyncRt:
                 per_page = effective_per_page
             page += 1
 
+    async def _search_objects(
+        self,
+        selector: str,
+        search_params: JSONSearchParams | None,
+        fields: str | list[str] | dict[str, str] | None,
+        default_fields: str,
+        *,
+        include_disabled: bool = False,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search objects with a JSON search, e.g. queues or classes.
+
+        :param selector: Endpoint of the search, e.g. ``queues``.
+        :param search_params: Conditions of the search. All objects if not specified: RT returns no object for a
+                              search without a condition, so a condition matching all objects is sent instead.
+        :param fields: Fields returned for each object, see :py:meth:`search_assets`.
+        :param default_fields: Fields returned if *fields* is not specified.
+        :param include_disabled: Set to True to also return disabled objects.
+        :returns: Iterator of the found objects.
+        """
+        conditions = list(search_params or [])
+        if not conditions:
+            conditions = [{'field': 'id', 'operator': '>', 'value': 0}]
+
+        params: dict[str, str | int] = {
+            **_fields_params(fields, default_fields=default_fields),
+            'find_disabled_rows': int(include_disabled),
+        }
+
+        async for item in self._paged_request(selector, json_data=conditions, params=params):
+            yield item
+
     @staticmethod
     def _validate_date(date: str) -> bool:
         """Check whether the specified date starts with a valid date in the supported format (YYYY-MM-DD)."""
@@ -1779,6 +1810,36 @@ class AsyncRt:
         async for item in self._paged_request('queues/all', params=params):
             yield item
 
+    async def search_queues(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        include_disabled: bool = False,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search queues.
+
+        Example::
+
+            >>> tracker.search_queues(search_params=[{'field': 'Lifecycle', 'value': 'default'}])
+
+        Unlike for other objects, RT combines several conditions on the same field with AND for queues. Add
+        ``'entry_aggregator': 'OR'`` to a condition to combine it with the previous one with OR.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'Name', 'operator': 'LIKE', 'value': 'Support'}]``. All queues if not
+                              specified.
+        :param fields: Fields returned for each queue: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT. By default Name, Description, Lifecycle and Disabled.
+        :param include_disabled: Set to True to also return disabled queues.
+        :returns: Iterator of the found queues.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        async for item in self._search_objects('queues', search_params, fields, 'Name,Description,Lifecycle,Disabled', include_disabled=include_disabled):
+            yield item
+
     async def edit_queue(self, queue_id: str | int, **kwargs: JSONInput) -> list[str]:
         """Edit queue.
 
@@ -2295,6 +2356,219 @@ class AsyncRt:
         ):
             yield transaction
 
+    async def get_all_classes(self, *, include_disabled: bool = False) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Get all classes of articles which the user can see.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param include_disabled: Set to True to also return disabled classes.
+        :returns: Iterator of the classes, each a dictionary with the keys id, type, _url, Name, Description and
+                  Disabled.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        params: dict[str, str | int] = {'fields': 'Name,Description,Disabled', 'find_disabled_rows': int(include_disabled)}
+
+        async for item in self._paged_request('classes/all', params=params):
+            yield item
+
+    async def search_classes(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        include_disabled: bool = False,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search classes of articles.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'Name', 'value': 'FAQ'}]``. All classes if not specified.
+        :param fields: Fields returned for each class: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT. By default Name, Description and Disabled.
+        :param include_disabled: Set to True to also return disabled classes.
+        :returns: Iterator of the found classes.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        async for item in self._search_objects('classes', search_params, fields, 'Name,Description,Disabled', include_disabled=include_disabled):
+            yield item
+
+    async def get_class(self, class_id: str | int) -> dict[str, typing.Any]:
+        """Get a class of articles.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param class_id: Identification of the class by name (str) or ID (int).
+        :returns: The class as dictionary, e.g. with the keys id, Name, Description, Disabled and
+                  ArticleCustomFields (the custom fields of its articles, e.g. Content).
+        :raises NotFoundError: If the class does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._dict_result(await self._send('GET', _path('class', class_id)))
+
+    async def create_class(self, name: str, **kwargs: JSONInput) -> int:
+        """Create a class of articles.
+
+        RT applies the custom field Content for the text of articles to new classes.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param name: Name of the class, which must be unique.
+        :param kwargs: Other fields to set, e.g. Description or SortOrder.
+        :returns: ID of the new class.
+        :raises BadRequestError: If RT rejects the request, e.g. if a class with the name exists.
+        :raises NotAllowedError: If the user is not allowed to create classes.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = await self._send('POST', 'class', json_data={'Name': name, **kwargs})
+
+        return int(self._created_id(self._dict_result(response)))
+
+    async def edit_class(self, class_id: str | int, **kwargs: JSONInput) -> list[str]:
+        """Edit a class of articles.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param class_id: Identification of the class by name (str) or ID (int).
+        :param kwargs: Fields to set, e.g. Name, Description, SortOrder, Disabled. RT ignores unknown fields.
+        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+        :raises NotFoundError: If the class does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._list_result(await self._send('PUT', _path('class', class_id), json_data=kwargs))
+
+    async def delete_class(self, class_id: str | int) -> None:
+        """Disable a class of articles.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param class_id: Identification of the class by name (str) or ID (int).
+        :raises NotFoundError: If the class does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        await self._delete(_path('class', class_id))
+
+    async def search_articles(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        include_disabled: bool = False,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search articles.
+
+        Example::
+
+            >>> tracker.search_articles(search_params=[{'field': 'Class', 'value': 1}, {'field': 'Name', 'operator': 'LIKE', 'value': 'VPN'}])
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'Name', 'operator': 'LIKE', 'value': 'VPN'}]``. All articles if not
+                              specified.
+        :param fields: Fields returned for each article: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT. By default Name, Summary, Class and Disabled.
+        :param include_disabled: Set to True to also return disabled (deleted) articles.
+        :returns: Iterator of the found articles.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        async for item in self._search_objects('articles', search_params, fields, 'Name,Summary,Class,Disabled', include_disabled=include_disabled):
+            yield item
+
+    async def get_article(self, article_id: str | int) -> dict[str, typing.Any]:
+        """Get an article.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param article_id: ID of the article.
+        :returns: The article as dictionary, e.g. with the keys id, Name, Summary, Class, Disabled and CustomFields,
+                  which contain its text in the custom field Content.
+        :raises NotFoundError: If the article does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._dict_result(await self._send('GET', _path('article', article_id)))
+
+    async def create_article(self, name: str, class_id: str | int, **kwargs: JSONInput) -> int:
+        """Create an article.
+
+        Example::
+
+            >>> tracker.create_article('VPN setup', 'FAQ', Summary='How to set up the VPN', CustomFields={'Content': 'Install ...'})
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param name: Name of the article, which must be unique in its class.
+        :param class_id: Identification of the class by name (str) or ID (int).
+        :param kwargs: Other fields to set, e.g. Summary, SortOrder, or CustomFields, e.g.
+                       ``CustomFields={'Content': 'Text of the article'}``.
+        :returns: ID of the new article.
+        :raises BadRequestError: If RT rejects the request, e.g. if an article with the name exists in the class
+                                 (RT reports this only as "Create failed for unknown reason").
+        :raises NotAllowedError: If the user is not allowed to create articles in the class, or the class does not
+                                 exist (RT returns status code 403 for both).
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = await self._send('POST', 'article', json_data={'Name': name, 'Class': class_id, **kwargs})
+
+        return int(self._created_id(self._dict_result(response)))
+
+    async def edit_article(self, article_id: str | int, **kwargs: JSONInput) -> list[str]:
+        """Edit an article.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param article_id: ID of the article.
+        :param kwargs: Fields to set, e.g. Name, Summary, SortOrder, or CustomFields, e.g.
+                       ``CustomFields={'Content': 'New text'}``. RT ignores unknown fields.
+        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+        :raises NotFoundError: If the article does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._list_result(await self._send('PUT', _path('article', article_id), json_data=kwargs))
+
+    async def delete_article(self, article_id: str | int) -> None:
+        """Delete (disable) an article.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param article_id: ID of the article.
+        :raises NotFoundError: If the article does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, e.g. if the article is already
+                                         deleted (RT fails with HTTP status 500 then).
+        """
+        await self._delete(_path('article', article_id))
+
+    async def get_article_history(self, article_id: str | int) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Get the history of an article.
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
+                  :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param article_id: ID of the article.
+        :returns: Iterator of transactions, each a dictionary with the keys id, type, Type, Creator, Created,
+                  Description, _url and _hyperlinks. Empty if the article does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        async for transaction in self._paged_request(
+            _path('article', article_id, 'history'),
+            params={
+                'fields': 'Type,Creator,Created,Description,_hyperlinks',
+                'fields[Creator]': 'id,Name,RealName,EmailAddress',
+            },
+        ):
+            yield transaction
+
     async def search_custom_fields(
         self,
         *,
@@ -2578,6 +2852,46 @@ class AsyncRt:
         response = await self._send('GET', _path('download', 'cf', value_id))
 
         return response.content
+
+    async def search_custom_roles(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        include_disabled: bool = False,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search custom roles.
+
+        Custom roles can only be read with REST2, not created or changed.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'Name', 'value': 'Manager'}]``. All custom roles if not specified.
+        :param fields: Fields returned for each custom role: a comma separated string or list of fields, or a
+                       dictionary with query parameters as defined by RT. By default Name, Description, MaxValues,
+                       LookupType and Disabled.
+        :param include_disabled: Set to True to also return disabled custom roles.
+        :returns: Iterator of the found custom roles.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        async for item in self._search_objects(
+            'customroles', search_params, fields, 'Name,Description,MaxValues,LookupType,Disabled', include_disabled=include_disabled
+        ):
+            yield item
+
+    async def get_custom_role(self, custom_role_id: str | int) -> dict[str, typing.Any]:
+        """Get a custom role.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param custom_role_id: ID of the custom role (RT does not support names here).
+        :returns: The custom role as dictionary, e.g. with the keys id, Name, Description, MaxValues (1 for a single
+                  member, 0 for several), LookupType, EntryHint and Disabled.
+        :raises NotFoundError: If the custom role does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._dict_result(await self._send('GET', _path('customrole', custom_role_id)))
 
     @staticmethod
     def _rights_object(object_type: RightsObjectType, object_id: str | int | None) -> tuple[str | int, ...]:

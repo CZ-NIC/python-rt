@@ -250,6 +250,10 @@ Python 3.11 or newer is required.
 - REST2 `get_ticket_messages()` returns the creation, replies and comments of a ticket with their text and author in
   one request per 100 messages, instead of `get_ticket_history()` followed by `get_transaction()` for each entry
   (both remain available).
+- REST2 `search_queues()` searches queues, `search_custom_roles()` and `get_custom_role()` read custom roles.
+- REST2 classes and articles (RT 5.0.1 or newer): `get_all_classes()`, `search_classes()`, `get_class()`,
+  `create_class()`, `edit_class()`, `delete_class()`, `search_articles()`, `get_article()`, `create_article()`,
+  `edit_article()`, `delete_article()` and `get_article_history()`.
 - REST2 `search_transactions()` searches transactions, also across tickets, with conditions or a TransactionSQL
   query (`raw_query`, RT 5.0.2 or newer).
 - REST2 `delete_asset()` marks an asset as deleted by setting its status (the REST2 endpoint for deleting assets

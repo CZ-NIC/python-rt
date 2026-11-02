@@ -458,6 +458,20 @@ RT ignores an invalid AssetSQL query and then returns all assets. ``delete_asset
 by setting its status, as RT does not delete assets.
 
 
+Articles and Classes
+````````````````````
+Articles (RT 5.0.1 or newer) belong to a class, their text is stored in the custom field ``Content``::
+
+    class_id = c.create_class('FAQ', Description='Frequently asked questions')
+    article_id = c.create_article('VPN setup', 'FAQ', Summary='How to set up the VPN',
+                                  CustomFields={'Content': 'Install the client ...'})
+    for article in c.search_articles(search_params=[{'field': 'Class', 'value': class_id}]):
+        print(article['Name'], article['Summary'])
+
+Queues are searched with ``search_queues()``, custom roles read with ``search_custom_roles()`` and
+``get_custom_role()`` (REST2 can not create or change them).
+
+
 Error Handling
 ``````````````
 All exceptions raised by the library are subclasses of :py:exc:`rt.exceptions.RtError`, e.g.:

@@ -16,13 +16,14 @@ RT_USER = 'root'
 RT_PASSWORD = 'password'
 RT_QUEUE = 'General'
 
-# REST2 can neither create authentication tokens nor apply custom fields to a queue, so tests/rt_setup.pl prepares RT
-# for the tests using them and prints a token, which is passed in the environment variable RT_TOKEN (see the script).
+# REST2 can neither create authentication tokens nor apply custom fields to a queue, so RT is prepared with
+# tests/rt_initdata.pl for the tests using them and a token is created with the helper rt-token of the RT image; the
+# token is passed in the environment variable RT_TOKEN (see tests/rt_initdata.pl).
 RT_TOKEN = os.environ.get('RT_TOKEN', '')
-# custom field of the queue RT_QUEUE created by tests/rt_setup.pl, the quote and the space test the quoting
+# custom field of the queue RT_QUEUE created by tests/rt_initdata.pl, the quote and the space test the quoting
 RT_CUSTOM_FIELD = "python-rt Test's Field"
 
-requires_rt_setup = pytest.mark.skipif(not RT_TOKEN, reason='RT is not prepared by tests/rt_setup.pl (RT_TOKEN is not set)')
+requires_rt_setup = pytest.mark.skipif(not RT_TOKEN, reason='RT is not prepared by tests/rt_initdata.pl (RT_TOKEN is not set)')
 
 
 @pytest.fixture(scope='session')

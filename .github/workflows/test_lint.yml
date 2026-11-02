@@ -16,11 +16,10 @@ jobs:
 
     services:
       rt:
-        image: netsandbox/request-tracker:6.0
+        # https://github.com/python-rt/docker-rt; the steps start when RT is ready (health check of the image)
+        image: ghcr.io/python-rt/request-tracker:6.0
         ports:
           - 8080:8080
-        env:
-          RT_WEB_PORT: 8080
 
     strategy:
       matrix:
@@ -39,13 +38,10 @@ jobs:
           uv sync --group test
 
       - name: Prepare RT
-        # REST2 can not create authentication tokens or apply custom fields to queues, see tests/rt_setup.pl
+        # REST2 can not create authentication tokens or apply custom fields to queues, see tests/rt_initdata.pl
         run: |
-          for attempt in $(seq 60); do
-            curl --silent --fail --output /dev/null http://localhost:8080/ && break
-            sleep 2
-          done
-          token=$(docker exec -i "${{ job.services.rt.id }}" perl - < tests/rt_setup.pl)
+          docker exec -i "${{ job.services.rt.id }}" rt-initdata - < tests/rt_initdata.pl
+          token=$(docker exec "${{ job.services.rt.id }}" rt-token --description 'python-rt tests')
           test -n "$token"
           echo "::add-mask::$token"
           echo "RT_TOKEN=$token" >> "$GITHUB_ENV"
@@ -61,11 +57,10 @@ jobs:
 
     services:
       rt:
-        image: netsandbox/request-tracker:6.0
+        # https://github.com/python-rt/docker-rt; the steps start when RT is ready (health check of the image)
+        image: ghcr.io/python-rt/request-tracker:6.0
         ports:
           - 8080:8080
-        env:
-          RT_WEB_PORT: 8080
 
     steps:
       - uses: actions/checkout@v7
@@ -80,13 +75,10 @@ jobs:
           uv pip install coverage[toml]
 
       - name: Prepare RT
-        # REST2 can not create authentication tokens or apply custom fields to queues, see tests/rt_setup.pl
+        # REST2 can not create authentication tokens or apply custom fields to queues, see tests/rt_initdata.pl
         run: |
-          for attempt in $(seq 60); do
-            curl --silent --fail --output /dev/null http://localhost:8080/ && break
-            sleep 2
-          done
-          token=$(docker exec -i "${{ job.services.rt.id }}" perl - < tests/rt_setup.pl)
+          docker exec -i "${{ job.services.rt.id }}" rt-initdata - < tests/rt_initdata.pl
+          token=$(docker exec "${{ job.services.rt.id }}" rt-token --description 'python-rt tests')
           test -n "$token"
           echo "::add-mask::$token"
           echo "RT_TOKEN=$token" >> "$GITHUB_ENV"

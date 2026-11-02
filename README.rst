@@ -116,6 +116,27 @@ Please use docstrings to see how to use different functions. They are written
 in ReStructuredText. You can also generate HTML documentation by running
 ``make html`` in doc directory (Sphinx required).
 
+Testing
+=======
+
+The tests run against a live RT on port 8080. Start the container image
+`ghcr.io/python-rt/request-tracker <https://github.com/python-rt/docker-rt>`_ from the root of the repository::
+
+    docker run --rm --name rt -p 8080:8080 \
+      -v ./tests/rt_initdata.pl:/docker-entrypoint-init.d/python-rt.pl:ro \
+      ghcr.io/python-rt/request-tracker:6.0
+
+``tests/rt_initdata.pl`` is inserted on the first start of the container (a custom field needed by the tests). The
+tests needing an authentication token are skipped unless ``RT_TOKEN`` is set; when RT is ready, run the tests in
+another shell with::
+
+    export RT_TOKEN=$(docker exec rt rt-token)
+    uv sync --group test
+    uv run pytest tests
+
+The user is ``root`` with the password ``password``. Use ``docker pull ghcr.io/python-rt/request-tracker:6.0``
+to update the image to the latest RT 6.0 release.
+
 Official Site
 =============
 

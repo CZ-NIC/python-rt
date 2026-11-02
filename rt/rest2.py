@@ -3,7 +3,7 @@
 """Python interface to Request Tracker :term:`API`.
 
 Description of Request Tracker :term:`REST` :term:`API`:
-https://developer.bestpractical.com/rt/6.0.4/RT/REST2.html
+https://docs.bestpractical.com/rt/6.0.4/RT/REST2.html
 """
 
 import collections.abc
@@ -78,7 +78,7 @@ __authors__ = [
 
 class Rt:
     """:term:`API` for Request Tracker according to
-    https://developer.bestpractical.com/rt/6.0.4/RT/REST2.html. Interface is based on
+    https://docs.bestpractical.com/rt/6.0.4/RT/REST2.html. Interface is based on
     :term:`REST` architecture, which is based on HTTP/1.1 protocol. This module
     is therefore mainly sending and parsing special HTTP messages.
 
@@ -88,7 +88,8 @@ class Rt:
         with Rt(url='https://tracker.example.com/REST/2.0/', http_auth=httpx2.BasicAuth('user', 'password')) as tracker:
             ticket = tracker.get_ticket(1)
 
-    .. warning:: You need at least version 5.0.2 of RT.
+    .. warning:: The client targets the latest version of RT (6.0) and is tested with it.
+                 Older versions of RT are not tested.
 
     .. note:: Use only ASCII LF (line feed) as newline. Time is returned in UTC.
               All strings returned are encoded in UTF-8 and the same is
@@ -821,7 +822,7 @@ class Rt:
             'ContentType': content_type,
         }
 
-        # Adding a one-shot cc/bcc is not supported by RT5.0.2
+        # Adding a one-shot cc/bcc is not supported by REST2 (RT 6.0.4)
         # if cc:
         #     post_data['Cc'] = cc  # noqa: ERA001
         #

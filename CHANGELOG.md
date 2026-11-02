@@ -113,6 +113,8 @@ Python 3.11 or newer is required.
 - The `base_url` attribute was removed; use `tracker.url.removesuffix('REST/2.0/')` if needed.
 
 ### Changes
+- The REST2 client targets the latest version of RT (6.0) and is tested with it, instead of RT 5.0.2. The
+  documentation refers to the [REST2 documentation of RT 6.0.4](https://docs.bestpractical.com/rt/6.0.4/RT/REST2.html).
 - **Breaking:** Remove support for Python 3.10, which reached its end of life; Python >= 3.11 is required.
 - **Breaking:** Replace *requests* with *httpx2* for the REST1 part; *requests* is no longer a dependency.
   - `Rt.session` is now an `httpx2.Client` instead of a `requests.Session`.

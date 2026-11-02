@@ -118,12 +118,50 @@ def test_does_not_exist_pattern(message: str, expected: bool):
     assert bool(rt.common.REGEX_PATTERNS['does_not_exist'].search(message)) is expected
 
 
+# --- attachments ------------------------------------------------------------------------------------------------------
+
+
+def test_attachment():
+    attachment = rt.common.Attachment('test.txt', 'text/plain', b'content')
+
+    assert attachment.to_dict() == {'FileName': 'test.txt', 'FileType': 'text/plain', 'FileContent': 'Y29udGVudA=='}
+    assert attachment.multipart_form_element() == ('test.txt', b'content', 'text/plain')
+
+
 # --- constants derived from types ------------------------------------------------------------------------------------
 
 
 def test_valid_values():
     assert rt.common.VALID_TICKET_LINK_NAMES == ('Parent', 'Child', 'RefersTo', 'ReferredToBy', 'DependsOn', 'DependedOnBy')
     assert rt.common.VALID_CONTENT_TYPES == ('text/plain', 'text/html')
+
+
+# --- exceptions ------------------------------------------------------------------------------------------------------
+
+
+def test_exceptions():
+    # invalid arguments can be caught as builtin ValueError as well as RtError
+    assert issubclass(rt.exceptions.InvalidUseError, ValueError)
+    assert issubclass(rt.exceptions.InvalidUseError, rt.exceptions.RtError)
+
+    not_found = rt.exceptions.NotFoundError('No such resource found.', status_code=404, response_message='{}')
+    assert (str(not_found), not_found.status_code, not_found.response_message) == ('No such resource found.', 404, '{}')
+
+    invalid_use = rt.exceptions.InvalidUseError('Invalid')
+    assert (invalid_use.status_code, invalid_use.response_message) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ('message', 'expected'),
+    [
+        ('Permission Denied', rt.exceptions.NotAllowedError),
+        ('That user already owns that ticket', rt.exceptions.InvalidUseError),
+    ],
+)
+def test_refusal_error(message: str, expected: type[Exception]):
+    error = rt.common._refusal_error(message)
+    assert type(error) is expected
+    assert str(error) == message
 
 
 # --- REST1 ---------------------------------------------------------------------------------------------------------------
@@ -142,4 +180,4 @@ def test_rest1_connection_error():
 
 def test_rest1_init_parameters_are_keyword_only():
     with pytest.raises(TypeError):
-        rt.rest1.Rt('http://localhost:8080/REST/1.0/')  # type: ignore[misc]
+        rt.rest1.Rt('http://localhost:8080/REST/1.0/')  # type: ignore[call-arg]

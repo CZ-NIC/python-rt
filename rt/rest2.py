@@ -38,9 +38,18 @@ from .common import (
     _CorrespondAction,
     _fields_params,
     _path,
+    _refusal_error,
     _search_fields_params,
 )
-from .exceptions import AuthorizationError, BadRequestError, InvalidUseError, NotFoundError, RtConnectionError, UnexpectedResponseError
+from .exceptions import (
+    AuthorizationError,
+    BadRequestError,
+    InvalidUseError,
+    NotAllowedError,
+    NotFoundError,
+    RtConnectionError,
+    UnexpectedResponseError,
+)
 
 __license__ = """ Copyright (C) 2012 CZ.NIC, z.s.p.o.
     Copyright (c) 2015 Genome Research Ltd.
@@ -116,7 +125,7 @@ class Rt:
                        `proxy`, `verify_cert`, `http_auth`, `token` and `http_timeout` must not be specified.
                        The client is owned by the caller and therefore not closed by :py:meth:`close`.
 
-        :raises ValueError: If the specified `url` or `per_page` is invalid, both `http_auth` and `token` are
+        :raises InvalidUseError: If the specified `url` or `per_page` is invalid, both `http_auth` and `token` are
                             specified, or connection settings are specified together with `client`.
         """
         self.logger = logging.getLogger(__name__)
@@ -126,13 +135,13 @@ class Rt:
             url = f'{url}/'
 
         if not url.endswith('REST/2.0/'):
-            raise ValueError('Invalid REST URL specified, please use a form of https://example.com/REST/2.0/')
+            raise InvalidUseError('Invalid REST URL specified, please use a form of https://example.com/REST/2.0/')
 
         if http_auth is not None and token is not None:
-            raise ValueError('Specify either http_auth or token, but not both.')
+            raise InvalidUseError('Specify either http_auth or token, but not both.')
 
         if not 1 <= per_page <= 100:
-            raise ValueError('per_page must be between 1 and 100 (the maximum supported by RT).')
+            raise InvalidUseError('per_page must be between 1 and 100 (the maximum supported by RT).')
 
         self.url = url
         self.per_page = per_page
@@ -140,7 +149,9 @@ class Rt:
         if client is not None:
             connection_settings_specified = proxy is not None or verify_cert is not True or http_auth is not None or token is not None or http_timeout != 20
             if connection_settings_specified:
-                raise ValueError('proxy, verify_cert, http_auth, token and http_timeout can not be used together with client, configure the client instead.')
+                raise InvalidUseError(
+                    'proxy, verify_cert, http_auth, token and http_timeout can not be used together with client, configure the client instead.'
+                )
 
             self.session = client
             # the client is owned by the caller, who is responsible for closing it
@@ -262,41 +273,57 @@ class Rt:
         return response
 
     @staticmethod
-    def _check_response(response: httpx2.Response) -> None:
+    def _error_message(response: httpx2.Response, default: str) -> str:
+        """Return the error message of an error response of RT, which is usually JSON like ``{"message": "..."}``.
+
+        :param response: Error response from RT.
+        :param default: Message used if the response does not contain a message.
+        :returns: The error message.
+        """
+        try:
+            result = response.json()
+        except ValueError:  # json.JSONDecodeError and UnicodeDecodeError are subclasses of ValueError
+            return default
+
+        if isinstance(result, dict):
+            message = result.get('message')
+            return message if isinstance(message, str) and message else response.text
+
+        return str(result)
+
+    @classmethod
+    def _check_response(cls, response: httpx2.Response) -> None:
         """Search general errors in server response and raise exceptions when found.
+
+        All raised exceptions carry the status code and body of the response.
 
         :param response: Response from HTTP request.
         :raises BadRequestError: If the server returned an HTTP/400 error.
         :raises AuthorizationError: Credentials are invalid or missing.
+        :raises NotAllowedError: The user is not allowed to execute the request (HTTP/403).
         :raises NotFoundError: Resource was not found.
         :raises UnexpectedResponseError: Server returned an unexpected status code.
         """
         status_code = response.status_code
+        text = response.text
 
         if status_code == 400:
-            try:
-                result = response.json()
-            except ValueError:
-                result = 'Bad request'
-
-            if isinstance(result, dict):
-                raise BadRequestError(result.get('message', response.text))
-
-            raise BadRequestError(result)
+            raise BadRequestError(cls._error_message(response, 'Bad request'), status_code=status_code, response_message=text)
 
         if status_code == 401:
-            raise AuthorizationError('Server could not verify that you are authorized to access the requested document.')
+            raise AuthorizationError(
+                'Server could not verify that you are authorized to access the requested document.', status_code=status_code, response_message=text
+            )
+
+        if status_code == 403:
+            raise NotAllowedError(cls._error_message(response, 'Forbidden'), status_code=status_code, response_message=text)
 
         if status_code == 404:
-            raise NotFoundError('No such resource found.')
+            raise NotFoundError('No such resource found.', status_code=status_code, response_message=text)
 
         # 204 (No Content) is returned when deleting resources
         if status_code not in (200, 201, 204):
-            raise UnexpectedResponseError(
-                f'Received status code {status_code} instead of 200.',
-                status_code=status_code,
-                response_message=response.text,
-            )
+            raise UnexpectedResponseError(f'Received status code {status_code} instead of 200.', status_code=status_code, response_message=text)
 
     @staticmethod
     def _decode_json(response: httpx2.Response) -> JSONValue:
@@ -450,21 +477,23 @@ class Rt:
 
         return 1970 < parsed_date.year < 2100
 
-    def new_correspondence(self, queue: str | None = None) -> collections.abc.Iterator[dict[str, typing.Any]]:
-        """Obtains tickets changed by other users than the system one.
+    def new_correspondence(self, *, queue: str | None = None) -> collections.abc.Iterator[dict[str, typing.Any]]:
+        """Obtains tickets changed by other users than the one used for the connection.
 
         :param queue: Queue where to search
 
         :returns: Iterator of tickets which were last updated by another user than
-                  the system one, ordered in decreasing order by LastUpdated.
-                  Each ticket is dictionary, the same as in
-                  :py:meth:`~Rt.get_ticket`.
+                  the one used for the connection, ordered in decreasing order by LastUpdated.
+                  Each ticket is a dictionary, the same as in
+                  :py:meth:`~Rt.search`.
         """
-        return self.search(queue=queue, order='-LastUpdated')
+        # RT replaces __CurrentUser__ with the user who executes the search
+        return self.search(queue=queue, order='-LastUpdated', LastUpdatedBy__notexact='__CurrentUser__')
 
     def last_updated(
         self,
         since: str | dt.date | dt.datetime,
+        *,
         queue: str | None = None,
     ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Obtains tickets changed after given date.
@@ -506,10 +535,12 @@ class Rt:
 
     def search(
         self,
+        *,
         queue: str | None = None,
         order: str | None = None,
         raw_query: str | None = None,
-        query_format: SearchFormat | list[str] | dict[str, str] = 'l',
+        fields: SearchFormat | list[str] | dict[str, str] = 'l',
+        conditions: collections.abc.Mapping[str, object] | None = None,
         **kwargs: object,
     ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Search arbitrary needles in given fields and queue.
@@ -518,6 +549,7 @@ class Rt:
 
             >>> tracker = Rt(url='http://tracker.example.com/REST/2.0/', http_auth=httpx2.BasicAuth('rt-username', 'top-secret'))
             >>> tickets = list(tracker.search(CF_Domain='example.com', Subject__like='warning'))
+            >>> tickets = list(tracker.search(conditions={'CF_Contact Email': 'a@example.com', 'Status': 'open'}))
             >>> tickets = list(tracker.search(queue='General', order='Status', raw_query="id='1'+OR+id='2'+OR+id='3'"))
 
         :param queue:      Queue where to search. If you wish to search across
@@ -529,15 +561,23 @@ class Rt:
                              you are doing. You may still pass Queue and order
                              kwargs, so use these instead of including them in
                              the raw query. You can refer to the RT query builder.
-                             If passing raw_query, all other ``**kwargs`` will be ignored.
+                             If passing raw_query, *conditions* and all other ``**kwargs`` will be ignored.
                              The raw query is passed to RT as is, so never include
                              untrusted input in it.
-        :param query_format: Format of the query:
+        :param fields:     Fields returned for each ticket:
 
-                               - i: only *id* fields are populated
-                               - s: only *id* and *subject* fields are populated
-                               - l: multi-line format, all fields are populated
-                               - [field1, field2]: list of fields to be populated
+                             - i: only *id* fields are populated
+                             - s: only *id* and *subject* fields are populated
+                             - l: multi-line format, many fields are populated
+                             - [field1, field2]: list of fields to be populated
+                             - dict: query parameters as defined by RT, e.g.
+                               ``{'fields': 'Owner', 'fields[Owner]': 'Name'}``
+        :param conditions: Search conditions as a mapping, in the same form as *kwargs*.
+                           Use this for conditions built at runtime and for field names
+                           which are not valid Python identifiers, e.g.
+                           ``{'CF_Contact Email': 'a@example.com'}``. Unlike unpacking a
+                           dictionary into *kwargs*, this is accepted by type checkers.
+                           Conditions are combined with *kwargs*.
         :param kwargs:     Other arguments possible to set if not passing raw_query:
 
                              Requestors, Subject, Cc, AdminCc, Owner, Status,
@@ -579,8 +619,15 @@ class Rt:
         :returns: Iterator over matching tickets. Each ticket is the same dictionary
                   as in :py:meth:`~Rt.get_ticket`.
         :raises BadRequestError: If the query is malformed.
-        :raises InvalidUseError: If an unsupported operator is used.
+        :raises InvalidUseError: If an unsupported operator is used, or a condition is given in both
+                                 *conditions* and *kwargs*.
         """
+        if conditions:
+            duplicates = conditions.keys() & kwargs.keys()
+            if duplicates:
+                raise InvalidUseError(f'Conditions given both in conditions and as keyword arguments: {", ".join(sorted(duplicates))}')
+            kwargs = {**conditions, **kwargs}
+
         get_params: dict[str, str | int] = {'query': _build_ticket_query(queue, raw_query, kwargs)}
 
         if order:
@@ -590,19 +637,21 @@ class Rt:
             else:
                 get_params['orderby'] = order
 
-        get_params.update(_search_fields_params(query_format))
+        get_params.update(_search_fields_params(fields))
 
         for item in self._paged_request('tickets', params=get_params):
             yield item
 
-    def get_ticket(self, ticket_id: str | int, query_format: dict[str, str] | None = None) -> dict[str, typing.Any]:
+    def get_ticket(self, ticket_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Fetch ticket by its ID.
 
         :param ticket_id: ID of demanded ticket
-        :param query_format: Returned fields to be populated
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Owner]': 'Name,EmailAddress'}``. RT always returns all fields of
+                       the ticket itself, so a list of fields as in :py:meth:`~Rt.search` is not supported.
 
         :returns: Dictionary with key, value pairs for ticket with
-                  *ticket_id*. List of keys (when query_format is None):
+                  *ticket_id*. List of keys:
 
                       * id
                       * numerical_id
@@ -629,19 +678,17 @@ class Rt:
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         :raises NotFoundError: If there is no ticket with the specified ticket_id.
         """
-        if not query_format:
-            query_format = {}
-
-        response = self._send('GET', _path('ticket', ticket_id), params={'fields[Queue]': 'Name', **query_format})
+        response = self._send('GET', _path('ticket', ticket_id), params={'fields[Queue]': 'Name', **(fields or {})})
 
         return self._dict_result(response)
 
     def create_ticket(
         self,
         queue: str,
-        content_type: ContentType = 'text/plain',
+        *,
         subject: str | None = None,
         content: str | None = None,
+        content_type: ContentType = 'text/plain',
         attachments: typing.Sequence[Attachment] | None = None,
         **kwargs: JSONInput,
     ) -> int:
@@ -660,9 +707,9 @@ class Rt:
             }
 
         :param queue: Queue where to create ticket
-        :param content_type: Content-type of the Content parameter; can be either text/plain or text/html.
         :param subject: Optional subject for the ticket.
         :param content: Optional content of the ticket. Must be specified unless attachments are specified.
+        :param content_type: Content-type of the Content parameter; can be either text/plain or text/html.
         :param attachments: Optional list of :py:class:`~rt.common.Attachment` objects
         :param kwargs: Other arguments possible to set:
 
@@ -671,10 +718,10 @@ class Rt:
                          TimeEstimated, Starts, Due
 
         :returns: ID of new ticket
-        :raises ValueError: If the `content_type` is not of a supported format.
+        :raises InvalidUseError: If the `content_type` is not of a supported format.
         """
         if content_type not in VALID_CONTENT_TYPES:
-            raise ValueError('Invalid content-type specified.')
+            raise InvalidUseError('Invalid content-type specified.')
 
         ticket_data: dict[str, JSONInput] = {'Queue': queue}
 
@@ -691,7 +738,7 @@ class Rt:
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_ticket(self, ticket_id: str | int, **kwargs: JSONInput) -> bool:
+    def edit_ticket(self, ticket_id: str | int, **kwargs: JSONInput) -> list[str]:
         """Edit ticket values.
 
         :param ticket_id: ID of ticket to edit
@@ -699,20 +746,20 @@ class Rt:
                        Priority, InitialPriority, FinalPriority, TimeEstimated, Starts, Due
                        (according to RT fields). Custom fields can be set as dictionary, e.g.
                        ``CustomFields={'Severity': 'Low'}``. RT ignores unknown fields.
-        :returns: ``True``, unless RT returned an empty status message.
+        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed),
+                  e.g. ``["Ticket 1: Subject changed from 'a' to 'b'"]``. RT reports invalid values only in these
+                  messages, e.g. ``"Ticket 1: Status 'x' isn't a valid status for this ticket."``, while the
+                  other fields are still changed.
         :raises NotFoundError: If the ticket, or a user or queue set in *kwargs*, does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         msg = self._list_result(self._send('PUT', _path('ticket', ticket_id), json_data=kwargs))
 
-        if not msg:
-            return True
-
         for message in msg:
             if REGEX_PATTERNS['does_not_exist'].search(message):
                 raise NotFoundError(message)
 
-        return bool(msg[0])
+        return msg
 
     def get_ticket_history(self, ticket_id: str | int) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Get set of short history items.
@@ -760,15 +807,14 @@ class Rt:
         :param attachments: Optional list of :py:class:`~rt.common.Attachment` objects
         :returns: List of messages returned by the backend related to the executed action.
         :raises BadRequestError: When ticket does not exist
-        :raises InvalidUseError: If the `action` parameter is invalid
-        :raises ValueError: If the `content_type` is not of a supported format.
+        :raises InvalidUseError: If the `action` parameter or the `content_type` is invalid.
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
         if action not in _CORRESPOND_ACTIONS:
             raise InvalidUseError('action must be either "correspond" or "comment"')
 
         if content_type not in VALID_CONTENT_TYPES:
-            raise ValueError('Invalid content-type specified.')
+            raise InvalidUseError('Invalid content-type specified.')
 
         post_data: dict[str, JSONInput] = {
             'Content': content,
@@ -790,9 +836,10 @@ class Rt:
         self,
         ticket_id: str | int,
         content: str = '',
+        *,
         content_type: ContentType = 'text/plain',
         attachments: typing.Sequence[Attachment] | None = None,
-    ) -> bool:
+    ) -> list[str]:
         """Sends email message to the contacts in ``Requestors`` field of
         given ticket with subject as is set in ``Subject`` field.
 
@@ -800,12 +847,9 @@ class Rt:
         :param content: Content of email message (text/plain or text/html)
         :param content_type: Content type of email message, default to text/plain
         :param attachments: Optional list of :py:class:`~rt.common.Attachment` objects
-        :returns: ``True``
-                      Operation was successful
-                  ``False``
-                      RT returned an empty status message
+        :returns: Status messages of RT, e.g. ``["Correspondence added"]``.
         :raises BadRequestError: When ticket does not exist
-        :raises ValueError: If the `content_type` is not of a supported format.
+        :raises InvalidUseError: If the `content_type` is not of a supported format.
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
         msg = self._correspond(ticket_id, content, 'correspond', content_type, attachments)
@@ -813,7 +857,7 @@ class Rt:
         if not msg:
             raise UnexpectedResponseError(str(msg))
 
-        return bool(msg[0])
+        return msg
 
     def delete_ticket(self, ticket_id: str | int) -> None:
         """Mark a ticket as deleted.
@@ -829,21 +873,19 @@ class Rt:
         self,
         ticket_id: str | int,
         content: str = '',
+        *,
         content_type: ContentType = 'text/plain',
         attachments: typing.Sequence[Attachment] | None = None,
-    ) -> bool:
+    ) -> list[str]:
         """Adds comment to the given ticket.
 
         :param ticket_id: ID of ticket to which comment belongs
         :param content: Content of comment
         :param content_type: Content type of comment, default to text/plain
         :param attachments: Optional list of :py:class:`~rt.common.Attachment` objects
-        :returns: ``True``
-                      Operation was successful
-                  ``False``
-                      RT returned an empty status message
+        :returns: Status messages of RT, e.g. ``["Comments added"]``.
         :raises BadRequestError: When ticket does not exist
-        :raises ValueError: If the `content_type` is not of a supported format.
+        :raises InvalidUseError: If the `content_type` is not of a supported format.
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
         msg = self._correspond(ticket_id, content, 'comment', content_type, attachments)
@@ -851,13 +893,14 @@ class Rt:
         if not msg:
             raise UnexpectedResponseError(str(msg))
 
-        return bool(msg[0])
+        return msg
 
     def get_attachments(
         self,
         ticket_id: str | int,
+        *,
         query_filter: list[dict[str, str]] | None = None,
-        query_format: str | list[str] | dict[str, str] | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
     ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Get attachment list for a given ticket.
 
@@ -878,13 +921,15 @@ class Rt:
 
         :param ticket_id: ID of ticket
         :param query_filter: JSON search filter, defaults to "filename is not empty"
-        :param query_format: Returned fields to be populated
+        :param fields: Fields returned for each attachment: a comma separated string or list of fields,
+                       or a dictionary with query parameters as defined by RT, e.g. ``{'fields[Creator]': 'Name'}``.
+                       Defaults to Filename, ContentType and ContentLength.
         :returns: Iterator of attachments belonging to given ticket.
         """
         if query_filter is None:
             query_filter = [{'field': 'Filename', 'operator': 'IS NOT', 'value': ''}]
 
-        get_params = _fields_params(query_format, default_fields='Filename,ContentType,ContentLength')
+        get_params = _fields_params(fields, default_fields='Filename,ContentType,ContentLength')
 
         for item in self._paged_request(
             _path('ticket', ticket_id, 'attachments'),
@@ -896,6 +941,7 @@ class Rt:
     def get_attachments_ids(
         self,
         ticket_id: str | int,
+        *,
         query_filter: list[dict[str, str]] | None = None,
     ) -> collections.abc.Iterator[int]:
         """Get IDs of attachments for given ticket.
@@ -1003,7 +1049,7 @@ class Rt:
         """
         return self._dict_result(self._send('GET', _path('user', user_id)))
 
-    def user_exists(self, user_id: int | str, privileged: bool = True) -> bool:
+    def user_exists(self, user_id: int | str, *, privileged: bool = True) -> bool:
         """Check if a given user exists.
 
         :param user_id: Identification of user by username (str) or user ID (int).
@@ -1162,7 +1208,7 @@ class Rt:
         """
         return self._dict_result(self._send('GET', _path('queue', queue_id)))
 
-    def get_all_queues(self, include_disabled: bool = False) -> collections.abc.Iterator[dict[str, typing.Any]]:
+    def get_all_queues(self, *, include_disabled: bool = False) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Return a list of all queues.
 
         Example of a return result:
@@ -1285,8 +1331,9 @@ class Rt:
         ticket_id: str | int,
         link_name: TicketLinkName,
         link_value: str | int,
+        *,
         delete: bool = False,
-    ) -> bool:
+    ) -> list[str]:
         """Creates or deletes a link between the specified tickets.
 
         :param ticket_id: ID of ticket to edit
@@ -1294,10 +1341,12 @@ class Rt:
                           'ReferredToBy', 'DependsOn', 'DependedOnBy')
         :param link_value: Either ticket ID or external link.
         :param delete: if True the link is deleted instead of created
-        :returns: ``True``; errors are raised as exceptions.
+        :returns: Status messages of RT, e.g. ``['Ticket 2 refers to Ticket 1.']``.
         :raises NotFoundError: If the ticket or the linked ticket does not exist.
         :raises InvalidUseError: If the link name is not supported or RT does not allow the link,
-                                 e.g. to a deleted ticket.
+                                 e.g. to a deleted ticket or from a ticket to itself, or if RT
+                                 could not create or delete the link.
+        :raises NotAllowedError: If the user is not allowed to change the links of the ticket.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         if link_name not in VALID_TICKET_LINK_NAMES:
@@ -1313,20 +1362,22 @@ class Rt:
         if msg:
             if msg[0].startswith("Couldn't resolve"):
                 raise NotFoundError(msg[0])
-            if 'not allowed' in msg[0]:
+            if 'not allowed' in msg[0] or msg[0].startswith(('Link could not be created', 'Link could not be deleted')):
                 raise InvalidUseError(msg[0])
+            if msg[0].endswith('Permission Denied'):
+                raise _refusal_error(msg[0])
 
-        return True
+        return msg
 
-    def merge_ticket(self, ticket_id: str | int, into_id: str | int) -> bool:
+    def merge_ticket(self, ticket_id: str | int, into_id: str | int) -> list[str]:
         """Merge ticket into another.
 
         :param ticket_id: ID of ticket to be merged
         :param into_id: ID of destination ticket
-        :returns: ``True`` if the tickets were merged, ``False`` if RT did not merge them,
-                  e.g. because the destination ticket does not exist or the user does not
-                  have the ModifyTicket right.
-        :raises NotFoundError: If the ticket to be merged does not exist.
+        :returns: Status messages of RT, i.e. ``['Merge Successful']``.
+        :raises NotFoundError: If the ticket to be merged or the destination ticket does not exist.
+        :raises InvalidUseError: If RT refused the merge, e.g. of a ticket into itself.
+        :raises NotAllowedError: If the user is not allowed to merge the tickets.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         msg = self._list_result(self._send('PUT', _path('ticket', ticket_id), json_data={'MergeInto': into_id}))
@@ -1334,14 +1385,21 @@ class Rt:
         if len(msg) != 1:
             raise UnexpectedResponseError(str(msg))
 
-        return msg[0].lower() == 'merge successful'
+        if msg[0].lower() != 'merge successful':
+            if msg[0] == "New ticket doesn't exist":
+                raise NotFoundError(msg[0])
+            raise _refusal_error(msg[0])
 
-    def _change_owner(self, ticket_id: str | int, action: typing.Literal['take', 'untake', 'steal']) -> bool:
+        return msg
+
+    def _change_owner(self, ticket_id: str | int, action: typing.Literal['take', 'untake', 'steal']) -> list[str]:
         """Take, untake or steal a ticket.
 
         :param ticket_id: ID of ticket
         :param action: The action to execute
-        :returns: ``True`` if RT confirmed the change of the owner.
+        :returns: Status messages of RT, e.g. ``['Owner changed from Nobody to root']``.
+        :raises InvalidUseError: If RT refused to change the owner.
+        :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
         msg = self._list_result(self._send('PUT', _path('ticket', ticket_id, action)))
@@ -1349,36 +1407,42 @@ class Rt:
         if len(msg) != 1:
             raise UnexpectedResponseError(str(msg))
 
-        return msg[0].lower().startswith('owner changed')
+        if not msg[0].lower().startswith('owner changed'):
+            raise _refusal_error(msg[0])
 
-    def take(self, ticket_id: str | int) -> bool:
+        return msg
+
+    def take(self, ticket_id: str | int) -> list[str]:
         """Take ticket.
 
         :param ticket_id: ID of ticket to be taken
-        :returns: ``True`` if the owner was changed, ``False`` if RT did not change it,
-                  e.g. because the user does not have the TakeTicket right.
+        :returns: Status messages of RT, e.g. ``['Owner changed from Nobody to root']``.
+        :raises InvalidUseError: If RT refused to change the owner, e.g. if the user already owns the ticket.
+        :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises NotFoundError: If the ticket does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         return self._change_owner(ticket_id, 'take')
 
-    def untake(self, ticket_id: str | int) -> bool:
+    def untake(self, ticket_id: str | int) -> list[str]:
         """Untake ticket.
 
         :param ticket_id: ID of ticket to be untaken
-        :returns: ``True`` if the owner was changed, ``False`` if RT did not change it,
-                  e.g. because the user does not own the ticket.
+        :returns: Status messages of RT, e.g. ``['Owner changed from root to Nobody']``.
+        :raises InvalidUseError: If RT refused to change the owner, e.g. if the ticket is not owned.
+        :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises NotFoundError: If the ticket does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         return self._change_owner(ticket_id, 'untake')
 
-    def steal(self, ticket_id: str | int) -> bool:
+    def steal(self, ticket_id: str | int) -> list[str]:
         """Steal ticket.
 
         :param ticket_id: ID of ticket to be stolen
-        :returns: ``True`` if the owner was changed, ``False`` if RT did not change it,
-                  e.g. because the user does not have the StealTicket right.
+        :returns: Status messages of RT, e.g. ``['Owner changed from Nobody to root']``.
+        :raises InvalidUseError: If RT refused to change the owner, e.g. if the ticket is not owned by another user.
+        :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises NotFoundError: If the ticket does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
@@ -1408,12 +1472,13 @@ class Rt:
         """
         return self._dict_result(self._send('GET', _path('catalog', catalog_id)))
 
-    def get_asset(self, asset_id: str | int, query_format: dict[str, str] | None = None) -> dict[str, typing.Any]:
+    def get_asset(self, asset_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get asset.
 
         :param asset_id: Asset ID.
-        :param query_format: Returned fields to be populated.
-        :returns: Asset as dictionary, with these keys if *query_format* is None:
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Catalog]': 'Name'}``. RT always returns all fields of the asset itself.
+        :returns: Asset as dictionary, with these keys:
 
                       * id
                       * Name
@@ -1435,10 +1500,7 @@ class Rt:
         :raises NotFoundError: If the asset does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        if not query_format:
-            query_format = {}
-
-        return self._dict_result(self._send('GET', _path('asset', asset_id), params=query_format))
+        return self._dict_result(self._send('GET', _path('asset', asset_id), params=fields or {}))
 
     def create_asset(self, name: str, catalog: str | int, **kwargs: JSONInput) -> int:
         """Create a new asset in a catalog.
@@ -1448,41 +1510,43 @@ class Rt:
         :param kwargs: Other fields to set, e.g. Description, Status, CustomFields, RefersTo.
         :returns: ID of the new asset.
         :raises BadRequestError: If RT rejects the request as invalid.
-        :raises UnexpectedResponseError: If the response from RT is not as expected, e.g. if the catalog
-                                         does not exist (RT returns status code 403).
+        :raises NotAllowedError: If the user is not allowed to create assets in the catalog,
+                                 or the catalog does not exist (RT returns status code 403 for both).
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         response = self._send('POST', 'asset', json_data={'Name': name, 'Catalog': catalog, **kwargs})
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_asset(self, asset_id: str | int, **kwargs: JSONInput) -> bool:
+    def edit_asset(self, asset_id: str | int, **kwargs: JSONInput) -> list[str]:
         """Edit an existing asset.
 
         :param asset_id: Asset ID.
         :param kwargs: Fields to set, e.g. Name, Description, Status, CustomFields, RefersTo.
-        :returns: ``True`` if RT returned status messages, ``False`` if it returned an unexpected response.
+        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
         :raises NotFoundError: If the asset does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        response = self._send('PUT', _path('asset', asset_id), json_data=kwargs)
-
-        return isinstance(self._decode_json(response), list)
+        return self._list_result(self._send('PUT', _path('asset', asset_id), json_data=kwargs))
 
     def search_assets(
         self,
+        *,
         catalog_id: str | int | None = None,
         search_params: collections.abc.Sequence[collections.abc.Mapping[str, JSONInput]] | None = None,
-        query_format: str | list[str] | dict[str, str] | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
     ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Search assets in a catalog.
 
         Example::
 
             >>> client = Rt(...)
-            >>> client.search_assets(1, [{"field": "Name", "value": "NameOfMyAsset"}], "Owner,Status")
-            >>> client.search_assets(1, [{"field": "Name", "value": "NameOfMyAsset"}], ["Owner", "Status"])
-            >>> client.search_assets(1, [{"field": "Name", "value": "NameOfMyAsset"}], {"fields": "Owner,Status", "fields[Owner]": "id,Name"})
+            >>> params = [{"field": "Name", "value": "NameOfMyAsset"}]
+            >>> client.search_assets(catalog_id=1, search_params=params, fields="Owner,Status")
+            >>> client.search_assets(catalog_id=1, search_params=params, fields=["Owner", "Status"])
+            >>> client.search_assets(catalog_id=1, search_params=params, fields={"fields": "Owner,Status", "fields[Owner]": "id,Name"})
 
-        The following is returned for each asset by default (when `query_format` is `None`)::
+        The following is returned for each asset by default (when `fields` is `None`)::
 
             {
                 'Description': '',
@@ -1500,7 +1564,8 @@ class Rt:
             - value: str | int
             - operator: Literal[">", "<", "=", "!=", "LIKE", "NOT LIKE", ">=", "<="] | None
 
-        :param query_format: Returned fields to be populated.
+        :param fields: Fields returned for each asset: a comma separated string or list of fields,
+                       or a dictionary with query parameters as defined by RT.
         :returns: Iterator of the found assets.
         """
         # copy the search parameters, so the list passed by the caller is not modified
@@ -1510,7 +1575,7 @@ class Rt:
         else:
             search_params.append({'field': 'Catalog', 'value': '%', 'operator': 'LIKE'})
 
-        get_params = _fields_params(query_format, default_fields='Owner,Description,Status')
+        get_params = _fields_params(fields, default_fields='Owner,Description,Status')
 
         for item in self._paged_request('assets', json_data=search_params, params=get_params):
             yield item

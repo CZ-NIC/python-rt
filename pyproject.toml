@@ -47,11 +47,13 @@ dev = [
   "bandit",
   "prek>=0.3.2",
   "unasyncd~=0.10",
+  "pytest-cov>=7.1.0",
 ]
 test = [
   "pytest~=9.1",
   "pytest-asyncio~=1.4",
   "coverage~=7.6",
+  "typeguard>=4.6.0",
 ]
 
 [tool.hatch.envs.default]
@@ -102,8 +104,23 @@ ignore_missing_imports = true
 warn_no_return = true
 
 files = [
-  "rt/**/*.py"
+  "rt/**/*.py",
+  "tests/**/*.py",
 ]
+
+[[tool.mypy.overrides]]
+# tests are checked, but need no complete type annotations
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+# the REST1 tests are an old unittest suite without type annotations
+module = "tests.test_rest1"
+ignore_errors = true
 
 [tool.pytest.ini_options]
 minversion = "8.0"

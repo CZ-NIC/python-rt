@@ -170,7 +170,11 @@ for a ticket with #1 having ticket #7 as parent, this would have as result:
 
 Editing ticket links. Adding a dependency on another ticket::
 
-    c.edit_link(1, 'DependsOn', 7, delete=False)
+    c.edit_link(1, 'DependsOn', 7)
+
+and removing it again::
+
+    c.edit_link(1, 'DependsOn', 7, delete=True)
 
 Creating a ticket::
 
@@ -193,6 +197,15 @@ Editing a ticket::
                                 }
                   )
 
+Methods changing something return the status messages of RT, e.g.
+``["Ticket 8: Subject changed from 'Test subject' to 'Re: Test subject'"]``. If RT refuses the change,
+an exception is raised instead, e.g. :py:exc:`~rt.exceptions.InvalidUseError` when taking a ticket which is
+already owned by the user. ``edit_ticket()`` and similar methods are an exception: RT reports invalid values
+of single fields only in the returned messages (e.g. ``"Ticket 8: Status 'x' isn't a valid status for this ticket."``),
+while the other fields are changed anyway.
+
+All optional arguments of the methods must be passed by keyword.
+
 
 Searching for tickets with status *new* in the *General* queue::
 
@@ -200,7 +213,7 @@ Searching for tickets with status *new* in the *General* queue::
 
 gives:
 
-.. code-block:: json
+.. code-block:: python
 
     [
         {
@@ -249,6 +262,12 @@ Merge ticket #1 into #2::
 
     c.merge_ticket(1, 2)
 
+Take, untake or steal a ticket (stealing is only possible for tickets owned by another user)::
+
+    c.take(1)
+    c.untake(1)
+    c.steal(1)
+
 Comment on a ticket and add an attachment::
 
     with open('README.rst', 'rb') as fhdl:
@@ -292,8 +311,13 @@ as needed while iterating. Conditions are passed as keyword arguments, which are
     for ticket in c.search(queue='General', Status='open', Owner='Nobody'):
         print(ticket['id'], ticket['Subject'])
 
-Custom fields are searched with the prefix ``CF_``, e.g. ``CF_Severity='High'``, or ``**{'CF_My Field': 'value'}``
-for names which are not valid Python identifiers.
+Custom fields are searched with the prefix ``CF_``, e.g. ``CF_Severity='High'``.
+
+Conditions can also be passed as a mapping with ``conditions``, e.g. for field names which are not valid Python
+identifiers or conditions built at runtime. Unlike unpacking a dictionary with ``**``, this is accepted by type
+checkers like mypy. Both forms can be combined, but a condition must not be given in both::
+
+    c.search(queue='General', conditions={'CF_Contact Email': 'a@example.com'}, Status='open')
 
 Other operators than ``=`` are used by appending them to the field name, e.g. ``Subject__like='coffee'``:
 
@@ -323,10 +347,10 @@ with ``raw_query`` instead; it is passed to RT as is, so it must never contain u
 
     c.search(queue='General', raw_query="Status = 'new' OR Status = 'open'")
 
-The fields returned for each ticket are selected with ``query_format``: ``'l'`` (default, many fields),
+The fields returned for each ticket are selected with ``fields``: ``'l'`` (default, many fields),
 ``'s'`` (ID and subject), ``'i'`` (only the ID), or a list of fields::
 
-    c.search(queue='General', query_format=['Subject', 'Status'])
+    c.search(queue='General', fields=['Subject', 'Status'])
 
 Tickets updated recently::
 
@@ -346,13 +370,16 @@ All exceptions raised by the library are subclasses of :py:exc:`rt.exceptions.Rt
 
 * :py:exc:`~rt.exceptions.NotFoundError`: the ticket, user, queue etc. does not exist.
 * :py:exc:`~rt.exceptions.AuthorizationError`: the credentials are invalid.
+* :py:exc:`~rt.exceptions.NotAllowedError`: the user does not have the rights for the request.
 * :py:exc:`~rt.exceptions.BadRequestError`: RT rejected the request.
-* :py:exc:`~rt.exceptions.InvalidUseError`: invalid arguments, e.g. an unsupported search operator.
+* :py:exc:`~rt.exceptions.InvalidUseError`: invalid arguments, e.g. an unsupported search operator, or RT
+  refused the action, e.g. merging a ticket into itself. It is also a builtin ``ValueError``.
 * :py:exc:`~rt.exceptions.UnexpectedResponseError`: the response is not as expected, e.g. an unexpected
   status code or an HTML page returned by a proxy instead of RT.
 * :py:exc:`~rt.exceptions.RtConnectionError`: RT can not be reached. It is also a builtin ``ConnectionError``.
 
-Invalid arguments are additionally reported with ``ValueError``, e.g. for an unsupported ``content_type``.
+Exceptions caused by an HTTP response of RT carry its status code and body in the attributes ``status_code``
+and ``response_message``.
 
 ::
 

@@ -79,9 +79,9 @@ An example is worth a thousand words::
     ... subject='Coffee (important)', content='Help I Ran Out of Coffee!')
     19
     >>> tracker.edit_ticket(19, Requestor='addicted@example.com')
-    True
+    ['Added addicted@example.com as Requestor for this ticket']
     >>> tracker.reply(19, content='Do you know Starbucks?')
-    True
+    ['Correspondence added']
 
 Get the last important updates from a specific queue that have been updated recently::
 

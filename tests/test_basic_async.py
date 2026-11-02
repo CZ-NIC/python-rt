@@ -76,15 +76,15 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     assert search_result[0]['id'] == str(ticket_id)
     assert search_result[0]['Status'] == 'new'
 
-    # search with query_format field list
-    search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject, query_format=['Status', 'Subject'])]
+    # search with a list of fields
+    search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject, fields=['Status', 'Subject'])]
     assert len(search_result) == 1
     assert search_result[0]['Subject'] == str(ticket_subject)
     assert search_result[0]['Status'] == 'new'
     assert 'Requestor' not in search_result[0].keys()
 
-    # search with query_format field dict
-    search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject, query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})]
+    # search with a dictionary of field parameters
+    search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject, fields={'fields': 'Owner', 'fields[Owner]': 'Name'})]
     assert len(search_result) == 1
     assert 'Subject' not in search_result[0]
     assert 'Status' not in search_result[0]
@@ -133,9 +133,9 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     for hyperlink in transaction['_hyperlinks']:
         if hyperlink['ref'] == 'attachment':
             attachment_id = hyperlink['_url'].rsplit('/', 1)[1]
-            attachment = base64.b64decode((await async_rt_connection.get_attachment(attachment_id))['Content']).decode('utf-8')
+            attachment_text = base64.b64decode((await async_rt_connection.get_attachment(attachment_id))['Content']).decode('utf-8')
             found = True
-            assert attachment == ticket_text
+            assert attachment_text == ticket_text
             break
 
     assert found
@@ -152,7 +152,7 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     assert ticket2_id > -1
 
     # edit link
-    assert await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id)
+    assert await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id) == [f'Ticket {ticket_id} depends on Ticket {ticket2_id}.']
 
     # get links
     links1 = await async_rt_connection.get_links(ticket_id)
@@ -169,20 +169,34 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
             found = True
     assert found
 
+    # delete link
+    assert await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id, delete=True) == [
+        f'Ticket {ticket_id} no longer depends on Ticket {ticket2_id}.'
+    ]
+    assert not [link for link in await async_rt_connection.get_links(ticket_id) if link['ref'] == 'depends-on']
+
+    # link to a ticket which does not exist
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.edit_link(ticket_id, 'DependsOn', 999999999)
+
+    # link which RT does not create
+    with pytest.raises(rt.exceptions.InvalidUseError, match='itself'):
+        await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket_id)
+
     # reply with attachment
     attachment_content = b'Content of attachment.'
     attachment_name = 'attachment-name.txt'
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
     attachment = Attachment(attachment_name, 'text/plain', attachment_content)
-    assert await async_rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment])
+    assert await async_rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment]) == ['Correspondence added']
 
     # reply with a comment
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert await async_rt_connection.comment(ticket_id, content=reply_text)
+    assert await async_rt_connection.comment(ticket_id, content=reply_text) == ['Comments added']
 
     # reply with a html content
     reply_text = '<em>Ut enim ad minim veniam</em>, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert await async_rt_connection.reply(ticket_id, content=reply_text, content_type='text/html')
+    assert await async_rt_connection.reply(ticket_id, content=reply_text, content_type='text/html') == ['Correspondence added']
 
     # attachments list
     at_list = [item async for item in async_rt_connection.get_attachments(ticket_id)]
@@ -207,14 +221,18 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
         await async_rt_connection.edit_ticket(999999999, Owner='Nobody')
 
     # merge tickets
-    assert await async_rt_connection.merge_ticket(ticket2_id, ticket_id)
+    with pytest.raises(rt.exceptions.InvalidUseError, match='itself'):
+        await async_rt_connection.merge_ticket(ticket_id, ticket_id)
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.merge_ticket(ticket2_id, 999999999)
+    assert await async_rt_connection.merge_ticket(ticket2_id, ticket_id) == ['Merge Successful']
 
     # delete ticket
-    assert await async_rt_connection.delete_ticket(ticket_id) is None
+    await async_rt_connection.delete_ticket(ticket_id)
 
     # delete invalid ticket
     with pytest.raises(rt.exceptions.NotFoundError):
-        assert await async_rt_connection.delete_ticket(999999999)
+        await async_rt_connection.delete_ticket(999999999)
 
 
 async def test_attachments_create(async_rt_connection: AsyncRt):
@@ -262,7 +280,7 @@ async def test_attachments_search(async_rt_connection: AsyncRt):
 
     ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment])
 
-    at_list = [item async for item in async_rt_connection.get_attachments(ticket_id, query_format=['TransactionId', 'Headers'])]
+    at_list = [item async for item in async_rt_connection.get_attachments(ticket_id, fields=['TransactionId', 'Headers'])]
     assert at_list
     assert len(at_list) == 1
 
@@ -477,20 +495,20 @@ async def test_assets(async_rt_connection: AsyncRt):
     assert len(asset_history) == 1
 
     asset_edited = await async_rt_connection.edit_asset(asset_id, Name=asset_name_new)
-    assert asset_edited
+    assert asset_edited == [f"Asset {asset_id}: Name changed from '{asset_name}' to '{asset_name_new}'"]
 
-    search = async_rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}])
+    search = async_rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}])
     items = [item async for item in search]
     assert len(items) == 1
     assert items[0]['Status'] == 'new'
 
-    search = async_rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}], query_format='Owner')
+    search = async_rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields='Owner')
     items = [item async for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['id'] == 'Nobody'
     assert 'Status' not in items[0]
 
-    search = async_rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}], query_format=['Owner'])
+    search = async_rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields=['Owner'])
     items = [item async for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['id'] == 'Nobody'
@@ -500,7 +518,9 @@ async def test_assets(async_rt_connection: AsyncRt):
     items = [item async for item in search]
     assert items
 
-    search = async_rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}], query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})
+    search = async_rt_connection.search_assets(
+        catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields={'fields': 'Owner', 'fields[Owner]': 'Name'}
+    )
     items = [item async for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['Name'] == 'Nobody'

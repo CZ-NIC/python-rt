@@ -79,15 +79,15 @@ def test_ticket_operations(rt_connection: Rt):
     assert search_result[0]['id'] == str(ticket_id)
     assert search_result[0]['Status'] == 'new'
 
-    # search with query_format field list
-    search_result = [item for item in rt_connection.search(Subject=ticket_subject, query_format=['Status', 'Subject'])]
+    # search with a list of fields
+    search_result = [item for item in rt_connection.search(Subject=ticket_subject, fields=['Status', 'Subject'])]
     assert len(search_result) == 1
     assert search_result[0]['Subject'] == str(ticket_subject)
     assert search_result[0]['Status'] == 'new'
     assert 'Requestor' not in search_result[0].keys()
 
-    # search with query_format field dict
-    search_result = [item for item in rt_connection.search(Subject=ticket_subject, query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})]
+    # search with a dictionary of field parameters
+    search_result = [item for item in rt_connection.search(Subject=ticket_subject, fields={'fields': 'Owner', 'fields[Owner]': 'Name'})]
     assert len(search_result) == 1
     assert 'Subject' not in search_result[0]
     assert 'Status' not in search_result[0]
@@ -136,9 +136,9 @@ def test_ticket_operations(rt_connection: Rt):
     for hyperlink in transaction['_hyperlinks']:
         if hyperlink['ref'] == 'attachment':
             attachment_id = hyperlink['_url'].rsplit('/', 1)[1]
-            attachment = base64.b64decode((rt_connection.get_attachment(attachment_id))['Content']).decode('utf-8')
+            attachment_text = base64.b64decode((rt_connection.get_attachment(attachment_id))['Content']).decode('utf-8')
             found = True
-            assert attachment == ticket_text
+            assert attachment_text == ticket_text
             break
 
     assert found
@@ -155,7 +155,7 @@ def test_ticket_operations(rt_connection: Rt):
     assert ticket2_id > -1
 
     # edit link
-    assert rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id)
+    assert rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id) == [f'Ticket {ticket_id} depends on Ticket {ticket2_id}.']
 
     # get links
     links1 = rt_connection.get_links(ticket_id)
@@ -172,20 +172,32 @@ def test_ticket_operations(rt_connection: Rt):
             found = True
     assert found
 
+    # delete link
+    assert rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id, delete=True) == [f'Ticket {ticket_id} no longer depends on Ticket {ticket2_id}.']
+    assert not [link for link in rt_connection.get_links(ticket_id) if link['ref'] == 'depends-on']
+
+    # link to a ticket which does not exist
+    with pytest.raises(rt.exceptions.NotFoundError):
+        rt_connection.edit_link(ticket_id, 'DependsOn', 999999999)
+
+    # link which RT does not create
+    with pytest.raises(rt.exceptions.InvalidUseError, match='itself'):
+        rt_connection.edit_link(ticket_id, 'DependsOn', ticket_id)
+
     # reply with attachment
     attachment_content = b'Content of attachment.'
     attachment_name = 'attachment-name.txt'
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
     attachment = Attachment(attachment_name, 'text/plain', attachment_content)
-    assert rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment])
+    assert rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment]) == ['Correspondence added']
 
     # reply with a comment
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert rt_connection.comment(ticket_id, content=reply_text)
+    assert rt_connection.comment(ticket_id, content=reply_text) == ['Comments added']
 
     # reply with a html content
     reply_text = '<em>Ut enim ad minim veniam</em>, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert rt_connection.reply(ticket_id, content=reply_text, content_type='text/html')
+    assert rt_connection.reply(ticket_id, content=reply_text, content_type='text/html') == ['Correspondence added']
 
     # attachments list
     at_list = [item for item in rt_connection.get_attachments(ticket_id)]
@@ -210,14 +222,18 @@ def test_ticket_operations(rt_connection: Rt):
         rt_connection.edit_ticket(999999999, Owner='Nobody')
 
     # merge tickets
-    assert rt_connection.merge_ticket(ticket2_id, ticket_id)
+    with pytest.raises(rt.exceptions.InvalidUseError, match='itself'):
+        rt_connection.merge_ticket(ticket_id, ticket_id)
+    with pytest.raises(rt.exceptions.NotFoundError):
+        rt_connection.merge_ticket(ticket2_id, 999999999)
+    assert rt_connection.merge_ticket(ticket2_id, ticket_id) == ['Merge Successful']
 
     # delete ticket
-    assert rt_connection.delete_ticket(ticket_id) is None
+    rt_connection.delete_ticket(ticket_id)
 
     # delete invalid ticket
     with pytest.raises(rt.exceptions.NotFoundError):
-        assert rt_connection.delete_ticket(999999999)
+        rt_connection.delete_ticket(999999999)
 
 
 def test_attachments_create(rt_connection: Rt):
@@ -265,7 +281,7 @@ def test_attachments_search(rt_connection: Rt):
 
     ticket_id = rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment])
 
-    at_list = [item for item in rt_connection.get_attachments(ticket_id, query_format=['TransactionId', 'Headers'])]
+    at_list = [item for item in rt_connection.get_attachments(ticket_id, fields=['TransactionId', 'Headers'])]
     assert at_list
     assert len(at_list) == 1
 
@@ -480,20 +496,20 @@ def test_assets(rt_connection: Rt):
     assert len(asset_history) == 1
 
     asset_edited = rt_connection.edit_asset(asset_id, Name=asset_name_new)
-    assert asset_edited
+    assert asset_edited == [f"Asset {asset_id}: Name changed from '{asset_name}' to '{asset_name_new}'"]
 
-    search = rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}])
+    search = rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}])
     items = [item for item in search]
     assert len(items) == 1
     assert items[0]['Status'] == 'new'
 
-    search = rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}], query_format='Owner')
+    search = rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields='Owner')
     items = [item for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['id'] == 'Nobody'
     assert 'Status' not in items[0]
 
-    search = rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}], query_format=['Owner'])
+    search = rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields=['Owner'])
     items = [item for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['id'] == 'Nobody'
@@ -503,7 +519,9 @@ def test_assets(rt_connection: Rt):
     items = [item for item in search]
     assert items
 
-    search = rt_connection.search_assets(1, [{'field': 'Name', 'value': asset_name_new}], query_format={'fields': 'Owner', 'fields[Owner]': 'Name'})
+    search = rt_connection.search_assets(
+        catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields={'fields': 'Owner', 'fields[Owner]': 'Name'}
+    )
     items = [item for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['Name'] == 'Nobody'

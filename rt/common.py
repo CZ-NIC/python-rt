@@ -7,7 +7,7 @@ import re
 import typing
 import urllib.parse
 
-from .exceptions import InvalidUseError
+from .exceptions import InvalidUseError, NotAllowedError
 
 __license__ = """ Copyright (C) 2012 CZ.NIC, z.s.p.o.
     Copyright (c) 2015 Genome Research Ltd.
@@ -208,43 +208,43 @@ def _build_ticket_query(queue: str | None, raw_query: str | None, conditions: co
     return ' AND '.join(f'({part})' for part in query)
 
 
-def _search_fields_params(query_format: SearchFormat | list[str] | dict[str, str]) -> dict[str, str]:
+def _search_fields_params(fields: SearchFormat | list[str] | dict[str, str]) -> dict[str, str]:
     """Return the query parameters selecting the fields returned for each ticket by a ticket search.
 
-    :param query_format: 'i' (only IDs), 's' (IDs and subjects), 'l' (many fields), a list of fields,
-                         or a dictionary with the query parameters to use.
+    :param fields: 'i' (only IDs), 's' (IDs and subjects), 'l' (many fields), a list of fields,
+                   or a dictionary with the query parameters to use.
     """
-    if isinstance(query_format, list):
-        return {'fields': ','.join(query_format)}
+    if isinstance(fields, list):
+        return {'fields': ','.join(fields)}
 
-    if isinstance(query_format, dict):
-        return dict(query_format)
+    if isinstance(fields, dict):
+        return dict(fields)
 
-    if query_format == 'l':
+    if fields == 'l':
         return {'fields': _SEARCH_LONG_FORMAT_FIELDS, 'fields[Queue]': 'Name'}
 
-    if query_format == 's':
+    if fields == 's':
         return {'fields': 'Subject'}
 
     # 'i': only the IDs are returned
     return {}
 
 
-def _fields_params(query_format: str | list[str] | dict[str, str] | None, default_fields: str) -> dict[str, str]:
+def _fields_params(fields: str | list[str] | dict[str, str] | None, default_fields: str) -> dict[str, str]:
     """Return the query parameters selecting the fields returned for each item.
 
-    :param query_format: A comma separated string or a list of fields, which replace the default fields,
-                         or a dictionary with query parameters, which are added to the default fields.
-    :param default_fields: Fields returned if *query_format* is None.
+    :param fields: A comma separated string or a list of fields, which replace the default fields,
+                   or a dictionary with query parameters, which are added to the default fields.
+    :param default_fields: Fields returned if *fields* is None.
     """
     params = {'fields': default_fields}
 
-    if isinstance(query_format, dict):
-        params.update(query_format)
-    elif isinstance(query_format, list):
-        params['fields'] = ','.join(query_format)
-    elif isinstance(query_format, str):
-        params['fields'] = query_format
+    if isinstance(fields, dict):
+        params.update(fields)
+    elif isinstance(fields, list):
+        params['fields'] = ','.join(fields)
+    elif isinstance(fields, str):
+        params['fields'] = fields
 
     return params
 
@@ -257,6 +257,18 @@ def _check_fields(fields: collections.abc.Iterable[str], valid_fields: frozenset
     invalid_fields = [field for field in fields if field not in valid_fields]
     if invalid_fields:
         raise InvalidUseError(f'Unsupported names of fields: {", ".join(invalid_fields)}.')
+
+
+def _refusal_error(message: str) -> InvalidUseError | NotAllowedError:
+    """Return the exception for an action which RT refused with the given status message.
+
+    :param message: Status message of RT, e.g. "That user already owns that ticket".
+    :returns: :py:exc:`NotAllowedError` if RT denied the permission, else :py:exc:`InvalidUseError`.
+    """
+    if message.endswith('Permission Denied'):
+        return NotAllowedError(message)
+
+    return InvalidUseError(message)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

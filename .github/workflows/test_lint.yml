@@ -38,6 +38,18 @@ jobs:
           python3 -m pip install uv
           uv sync --group test
 
+      - name: Prepare RT
+        # REST2 can not create authentication tokens or apply custom fields to queues, see tests/rt_setup.pl
+        run: |
+          for attempt in $(seq 60); do
+            curl --silent --fail --output /dev/null http://localhost:8080/ && break
+            sleep 2
+          done
+          token=$(docker exec -i "${{ job.services.rt.id }}" perl - < tests/rt_setup.pl)
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "RT_TOKEN=$token" >> "$GITHUB_ENV"
+
       - name: Test with pytest
         run: |
           uv run pytest -v tests
@@ -66,6 +78,18 @@ jobs:
           python3 -m pip install uv
           uv sync --group test
           uv pip install coverage[toml]
+
+      - name: Prepare RT
+        # REST2 can not create authentication tokens or apply custom fields to queues, see tests/rt_setup.pl
+        run: |
+          for attempt in $(seq 60); do
+            curl --silent --fail --output /dev/null http://localhost:8080/ && break
+            sleep 2
+          done
+          token=$(docker exec -i "${{ job.services.rt.id }}" perl - < tests/rt_setup.pl)
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "RT_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: Generate coverage data
         run: |
@@ -100,7 +124,8 @@ jobs:
         run: uv run unasyncd
 
       - name: mypy
-        run: uv run mypy --config-file pyproject.toml rt
+        # checks the files configured in pyproject.toml: the library and the tests
+        run: uv run mypy --config-file pyproject.toml
 
       - name: bandit
         run: uv run bandit -r rt

@@ -49,6 +49,14 @@ _SEARCH_LONG_FORMAT_FIELDS = (
     'Owner,Status,Created,Subject,Queue,CustomFields,Requestor,Cc,AdminCc,Started,Created,TimeEstimated,Due,Type,InitialPriority,Priority,TimeLeft,LastUpdated'
 )
 
+# Objects on which rights can be granted with REST2; 'global' grants rights on the whole system.
+RightsObjectType: typing.TypeAlias = typing.Literal['queue', 'group', 'class', 'catalog', 'customfield', 'global']
+VALID_RIGHTS_OBJECT_TYPES: tuple[str, ...] = typing.get_args(RightsObjectType)
+
+# Objects whose custom fields can be searched with REST2.
+CustomFieldObjectType: typing.TypeAlias = typing.Literal['queue', 'catalog', 'class']
+VALID_CUSTOM_FIELD_OBJECT_TYPES: tuple[str, ...] = typing.get_args(CustomFieldObjectType)
+
 # Actions for adding a message to a ticket.
 _CorrespondAction: typing.TypeAlias = typing.Literal['correspond', 'comment']
 _CORRESPOND_ACTIONS: tuple[str, ...] = typing.get_args(_CorrespondAction)
@@ -61,6 +69,9 @@ JSONInput: typing.TypeAlias = str | int | float | bool | None | collections.abc.
 
 # Query parameters added to the URL of a request.
 QueryParams: typing.TypeAlias = collections.abc.Mapping[str, str | int]
+
+# Conditions of a JSON search of REST2, e.g. ``[{'field': 'Name', 'operator': 'LIKE', 'value': 'Support'}]``.
+JSONSearchParams: typing.TypeAlias = collections.abc.Sequence[collections.abc.Mapping[str, JSONInput]]
 
 # Matches the messages RT returns when a referenced user, queue or resource does not exist, e.g.
 # "That user does not exist" or "Ticket 1: Queue Support does not exist".

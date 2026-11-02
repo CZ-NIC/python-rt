@@ -72,7 +72,7 @@ source = "vcs"
 [tool.unasyncd]
 # rt/rest2.py and the sync REST2 tests are generated from the async ones, do not edit them manually.
 # Run `uv run unasyncd` to regenerate them; it exits with 1 if a generated file was out of date.
-files = { "rt/rest2_async.py" = "rt/rest2.py", "tests/test_basic_async.py" = "tests/test_basic.py", "tests/test_tickets_async.py" = "tests/test_tickets.py", "tests/test_rest2_fixes_async.py" = "tests/test_rest2_fixes.py" }
+files = { "rt/rest2_async.py" = "rt/rest2.py", "tests/test_basic_async.py" = "tests/test_basic.py", "tests/test_tickets_async.py" = "tests/test_tickets.py", "tests/test_rest2_fixes_async.py" = "tests/test_rest2_fixes.py", "tests/test_rest2_admin_async.py" = "tests/test_rest2_admin.py" }
 add_replacements = { "AsyncRt" = "Rt", "httpx2.AsyncClient" = "httpx2.Client", "aclose" = "close" }
 add_editors_note = true
 transform_docstrings = true
@@ -92,6 +92,10 @@ cache = false
 "async_rt_connection" = "rt_connection"
 
 [tool.unasyncd.per_file_add_replacements."tests/test_rest2_fixes_async.py"]
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
+[tool.unasyncd.per_file_add_replacements."tests/test_rest2_admin_async.py"]
 "rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
 "async_rt_connection" = "rt_connection"
 
@@ -233,6 +237,7 @@ ignore = [
 "tests/test_basic.py" = ["C416"]
 "tests/test_tickets.py" = ["C416"]
 "tests/test_rest2_fixes.py" = ["C416"]
+"tests/test_rest2_admin.py" = ["C416"]
 
 [tool.ruff.format]
 quote-style = "single"

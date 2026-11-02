@@ -364,6 +364,63 @@ A ``datetime`` with timezone is an exact point in time. Dates, naive datetimes a
 or ``'2024-01-31 12:00:00'`` are interpreted by RT in the timezone of the RT user.
 
 
+Users and Groups
+````````````````
+The docstrings of the methods state the minimum RT version they require.
+
+Users and groups are searched with conditions like assets (all if none are given), e.g. the privileged users
+of a domain::
+
+    c.search_users(search_params=[{'field': 'EmailAddress', 'operator': 'LIKE', 'value': '@example.com'}],
+                   privileged=True)
+
+Groups are identified by their ID, as RT does not support group names in most requests. Members are added
+one at a time, by name to a group or by ID (of a user or group) as member of a group::
+
+    group_id = c.create_group('Staff', Description='Support staff')
+    c.add_user_to_group('alice', group_id)
+    c.add_group_member(group_id, 42)
+    for member in c.get_group_members(group_id, recursive=True):
+        print(member['type'], member['id'])
+
+
+Custom Fields
+`````````````
+Creating a custom field for tickets with selectable values and applying it to queues::
+
+    cf_id = c.create_custom_field('Severity', 'Select', 'RT::Queue-RT::Ticket', MaxValues=1)
+    c.add_custom_field_value(cf_id, 'High', SortOrder=1)
+    c.add_custom_field_value(cf_id, 'Low', SortOrder=2)
+    c.apply_custom_field(cf_id, queue_id)  # 0 applies it globally, requires RT 6.0.3 or newer
+
+The custom fields applied to a queue::
+
+    c.search_custom_fields(object_type='queue', object_id=queue_id)
+
+Files are set as value of an Image or Binary custom field with an :py:class:`~rt.common.Attachment`, and read
+with the ID which is the last part of the ``_url`` of the value in the ticket::
+
+    c.edit_ticket(8, CustomFields={'Screenshot': Attachment('screen.png', 'image/png', content).to_dict()})
+    content = c.get_custom_field_file(value_id)
+
+
+Rights
+``````
+Rights can be managed with RT 6.0.3 or newer. They are granted on a queue, group, class, catalog or custom field,
+or globally, to a user (by name or ID) or a group (by ID)::
+
+    c.grant_right('queue', 'General', 'CreateTicket', group=group_id)
+    c.grant_right('global', None, 'SuperUser', user='alice')
+    for right in c.get_rights('queue', 'General', user='alice'):
+        print(right['Right'])
+    c.revoke_right('queue', 'General', 'CreateTicket', group=group_id)
+
+``get_available_rights()`` returns the rights which can be granted on an object, grouped by category.
+Granting a right which is already granted raises :py:exc:`~rt.exceptions.ConflictError`.
+
+The version of RT and its plugins are returned by ``get_system_info()``.
+
+
 Error Handling
 ``````````````
 All exceptions raised by the library are subclasses of :py:exc:`rt.exceptions.RtError`, e.g.:
@@ -372,6 +429,8 @@ All exceptions raised by the library are subclasses of :py:exc:`rt.exceptions.Rt
 * :py:exc:`~rt.exceptions.AuthorizationError`: the credentials are invalid.
 * :py:exc:`~rt.exceptions.NotAllowedError`: the user does not have the rights for the request.
 * :py:exc:`~rt.exceptions.BadRequestError`: RT rejected the request.
+* :py:exc:`~rt.exceptions.ConflictError`: the request conflicts with the state in RT, e.g. a right is already
+  granted. It is a subclass of :py:exc:`~rt.exceptions.UnexpectedResponseError`.
 * :py:exc:`~rt.exceptions.InvalidUseError`: invalid arguments, e.g. an unsupported search operator, or RT
   refused the action, e.g. merging a ticket into itself. It is also a builtin ``ValueError``.
 * :py:exc:`~rt.exceptions.UnexpectedResponseError`: the response is not as expected, e.g. an unexpected

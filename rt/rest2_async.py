@@ -229,6 +229,7 @@ class AsyncRt:
         params: QueryParams | None = None,
         json_data: JSONInput = None,
         attachments: typing.Sequence[Attachment] | None = None,
+        form_data: collections.abc.Mapping[str, str] | None = None,
     ) -> httpx2.Response:
         """Send a request to the :term:`API` and check the response for errors.
 
@@ -240,6 +241,8 @@ class AsyncRt:
         :param json_data: Data to send as JSON request body.
         :param attachments: Optional list of :py:class:`~rt.common.Attachment` objects. If given, the request
                             is sent as multipart/form-data with *json_data* in the ``JSON`` field.
+        :param form_data: Fields to send as form encoded request body (application/x-www-form-urlencoded), e.g. the
+                          query of a search sent as POST. Can not be combined with *json_data* and *attachments*.
 
         :returns: The response, which has a successful status code.
         :raises BadRequestError: If the server returned an HTTP/400 error.
@@ -255,8 +258,13 @@ class AsyncRt:
         if method in ('PUT', 'DELETE'):
             headers = {'Content-Type': 'application/json'}
 
+        if form_data is not None and (json_data is not None or attachments):
+            raise InvalidUseError('form_data can not be combined with json_data or attachments.')
+
         try:
-            if attachments:
+            if form_data is not None:
+                response = await self.session.request(method, url, params=params, data=form_data)
+            elif attachments:
                 files = [('Attachments', attachment.multipart_form_element()) for attachment in attachments]
                 response = await self.session.request(
                     method,
@@ -416,6 +424,7 @@ class AsyncRt:
         selector: str,
         json_data: JSONInput = None,
         params: QueryParams | None = None,
+        form_data: collections.abc.Mapping[str, str] | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, JSONValue]]:
         """Request all pages of a paginated :term:`API` result.
 
@@ -425,19 +434,22 @@ class AsyncRt:
         :param json_data: JSON request (e.g. search filter) to send to the API. If set, the request
                           is sent as POST, otherwise as GET.
         :param params: Query parameters to add to the URL.
+        :param form_data: Fields to send as form encoded request body, e.g. a TicketSQL query. If set, the request
+                          is sent as POST. RT reads them like query parameters, so the paging parameters are still
+                          added to the URL.
 
         :returns: Iterator over the items of all pages.
         :raises UnexpectedResponseError: If the response is not a paginated result.
         :raises RtConnectionError: In case of connection error.
         """
-        method: typing.Literal['GET', 'POST'] = 'GET' if json_data is None else 'POST'
+        method: typing.Literal['GET', 'POST'] = 'GET' if json_data is None and form_data is None else 'POST'
         page = 1
         per_page = self.per_page
 
         while True:
             # copy the parameters, so the dictionary passed by the caller is not modified
             page_params = {**(params or {}), 'page': page, 'per_page': per_page}
-            result = self._dict_result(await self._send(method, selector, params=page_params, json_data=json_data))
+            result = self._dict_result(await self._send(method, selector, params=page_params, json_data=json_data, form_data=form_data))
 
             items = result.get('items')
             pages = result.get('pages')
@@ -566,6 +578,9 @@ class AsyncRt:
             >>> tickets = list(tracker.search(conditions={'CF_Contact Email': 'a@example.com', 'Status': 'open'}))
             >>> tickets = list(tracker.search(queue='General', order='Status', raw_query="id='1'+OR+id='2'+OR+id='3'"))
 
+        The query is sent in the body of a POST request, so it is not limited by the maximum length of URLs and does
+        not appear in the access logs of RT or of proxies in front of it.
+
         .. note:: Requires RT 5.0.0 or newer.
 
         :param queue:      Queue where to search. If you wish to search across
@@ -644,7 +659,10 @@ class AsyncRt:
                 raise InvalidUseError(f'Conditions given both in conditions and as keyword arguments: {", ".join(sorted(duplicates))}')
             kwargs = {**conditions, **kwargs}
 
-        get_params: dict[str, str | int] = {'query': _build_ticket_query(queue, raw_query, kwargs)}
+        # The query is sent in the body of a POST request, so it is not limited by the maximum length of URLs and does
+        # not appear in the access logs of RT or proxies. RT reads it like a query parameter.
+        query = _build_ticket_query(queue, raw_query, kwargs)
+        get_params: dict[str, str | int] = {}
 
         if order:
             if order.startswith('-'):
@@ -655,7 +673,7 @@ class AsyncRt:
 
         get_params.update(_search_fields_params(fields))
 
-        async for item in self._paged_request('tickets', params=get_params):
+        async for item in self._paged_request('tickets', params=get_params, form_data={'query': query}):
             yield item
 
     async def get_ticket(self, ticket_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
@@ -816,6 +834,100 @@ class AsyncRt:
 
         return self._dict_result(response)
 
+    async def search_transactions(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        raw_query: str | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        order: str | None = None,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search transactions, e.g. of a ticket or across tickets, with conditions or a TransactionSQL query.
+
+        Example::
+
+            >>> tracker.search_transactions(search_params=[{'field': 'ObjectId', 'value': 1}, {'field': 'Type', 'value': 'Comment'}])
+            >>> tracker.search_transactions(raw_query="Type = 'Correspond' AND Created > '2024-01-01'", fields=['Type', 'Content'])
+
+        Conditions on different fields are combined with AND, several conditions on the same field with OR (see the
+        REST2 documentation of RT on JSON searches). The query is sent in the body of a POST request like the one of
+        :py:meth:`search`.
+
+        .. note:: Requires RT 5.0.0 or newer, *raw_query* requires RT 5.0.2 or newer.
+
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'ObjectType', 'value': 'RT::Ticket'}, {'field': 'ObjectId', 'value': 1}]``.
+        :param raw_query: TransactionSQL query, used instead of *search_params*, e.g.
+                          ``"ObjectType = 'RT::Ticket' AND ObjectId = 1 AND Type = 'Comment'"``. It is passed to RT
+                          as is, so never include untrusted input in it.
+        :param fields: Fields returned for each transaction: a comma separated string or list of fields, or a
+                       dictionary with query parameters as defined by RT. By default Type, Created, Creator,
+                       ObjectType and ObjectId. ``Content`` returns the text of messages, see
+                       :py:meth:`get_ticket_messages`.
+        :param order: Name of the field to sort the transactions by, with ``-`` in front for descending order,
+                      e.g. ``'-Created'``.
+        :returns: Iterator of the found transactions.
+        :raises InvalidUseError: If not exactly one of *search_params* and *raw_query* is specified, or *raw_query* is
+                                 empty.
+        :raises BadRequestError: If the TransactionSQL query is invalid.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        if (search_params is None) == (raw_query is None):
+            raise InvalidUseError('Specify either search_params or raw_query.')
+
+        params: dict[str, str | int] = {**_fields_params(fields, default_fields='Type,Created,Creator,ObjectType,ObjectId')}
+        if order:
+            if order.startswith('-'):
+                params['orderby'] = order[1:]
+                params['order'] = 'DESC'
+            else:
+                params['orderby'] = order
+
+        if raw_query is not None:
+            if not raw_query.strip():
+                raise InvalidUseError('raw_query must not be empty.')
+            transactions = self._paged_request('transactions', params=params, form_data={'query': raw_query})
+        else:
+            transactions = self._paged_request('transactions', json_data=list(search_params or []), params=params)
+
+        async for item in transactions:
+            yield item
+
+    async def get_ticket_messages(self, ticket_id: str | int) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Get the messages of a ticket, i.e. its creation, replies and comments with their text, oldest first.
+
+        Unlike :py:meth:`get_ticket_history` followed by :py:meth:`get_transaction` for each entry, this needs only one
+        request per 100 messages.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param ticket_id: ID of the ticket.
+        :returns: Iterator of the transactions, each a dictionary with the keys id, type, _url, Type (Create, Correspond
+                  or Comment), Created, Creator (a dictionary with id, Name, RealName and EmailAddress), TimeTaken and
+                  Content. Content is the text of the message, as plain text also for HTML messages (converted by RT),
+                  without attachments (see :py:meth:`get_attachments`), so it is empty for a message with only
+                  attachments. Empty if the ticket does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        search_params: list[dict[str, JSONInput]] = [
+            {'field': 'ObjectType', 'value': 'RT::Ticket'},
+            {'field': 'ObjectId', 'value': ticket_id},
+            # several conditions on the same field are combined with OR
+            {'field': 'Type', 'value': 'Create'},
+            {'field': 'Type', 'value': 'Correspond'},
+            {'field': 'Type', 'value': 'Comment'},
+        ]
+        params: dict[str, str | int] = {
+            'fields': 'Type,Created,Creator,TimeTaken,Content',
+            'fields[Creator]': 'Name,RealName,EmailAddress',
+            # IDs of transactions are assigned in chronological order and are unique, unlike the creation time
+            'orderby': 'id',
+            'order': 'ASC',
+        }
+
+        async for item in self._paged_request('transactions', json_data=search_params, params=params):
+            yield item
+
     async def _correspond(
         self,
         ticket_id: str | int,
@@ -823,6 +935,8 @@ class AsyncRt:
         action: _CorrespondAction = 'correspond',
         content_type: ContentType = 'text/plain',
         attachments: typing.Sequence[Attachment] | None = None,
+        *,
+        extra_fields: collections.abc.Mapping[str, JSONInput] | None = None,
     ) -> list[str]:
         """Sends out the correspondence.
 
@@ -831,6 +945,7 @@ class AsyncRt:
         :param action: correspond or comment
         :param content_type: Content type of email message, defaults to text/plain. Alternative is text/html.
         :param attachments: Optional list of :py:class:`~rt.common.Attachment` objects
+        :param extra_fields: Further fields of the request, e.g. ``{'Status': 'resolved'}``.
         :returns: List of messages returned by the backend related to the executed action.
         :raises BadRequestError: When ticket does not exist
         :raises InvalidUseError: If the `action` parameter or the `content_type` is invalid.
@@ -843,6 +958,7 @@ class AsyncRt:
             raise InvalidUseError('Invalid content-type specified.')
 
         post_data: dict[str, JSONInput] = {
+            **(extra_fields or {}),
             'Content': content,
             'ContentType': content_type,
         }
@@ -858,6 +974,27 @@ class AsyncRt:
 
         return self._list_result(response)
 
+    @staticmethod
+    def _message_fields(
+        *,
+        subject: str | None,
+        time_taken: int | None,
+        status: str | None,
+        custom_fields: collections.abc.Mapping[str, JSONInput] | None,
+        custom_roles: collections.abc.Mapping[str, JSONInput] | None,
+        txn_custom_fields: collections.abc.Mapping[str, JSONInput] | None,
+    ) -> dict[str, JSONInput]:
+        """Return the fields of a reply or comment which are set, named as expected by RT."""
+        fields: dict[str, JSONInput] = {
+            'Subject': subject,
+            'TimeTaken': time_taken,
+            'Status': status,
+            'CustomFields': custom_fields,
+            'CustomRoles': custom_roles,
+            'TxnCustomFields': txn_custom_fields,
+        }
+        return {name: value for name, value in fields.items() if value is not None}
+
     async def reply(
         self,
         ticket_id: str | int,
@@ -865,6 +1002,12 @@ class AsyncRt:
         *,
         content_type: ContentType = 'text/plain',
         attachments: typing.Sequence[Attachment] | None = None,
+        subject: str | None = None,
+        time_taken: int | None = None,
+        status: str | None = None,
+        custom_fields: collections.abc.Mapping[str, JSONInput] | None = None,
+        custom_roles: collections.abc.Mapping[str, JSONInput] | None = None,
+        txn_custom_fields: collections.abc.Mapping[str, JSONInput] | None = None,
     ) -> list[str]:
         """Sends email message to the contacts in ``Requestors`` field of
         given ticket with subject as is set in ``Subject`` field.
@@ -875,12 +1018,37 @@ class AsyncRt:
         :param content: Content of email message (text/plain or text/html)
         :param content_type: Content type of email message, default to text/plain
         :param attachments: Optional list of :py:class:`~rt.common.Attachment` objects
-        :returns: Status messages of RT, e.g. ``["Correspondence added"]``.
+        :param subject: Subject of the reply, instead of the subject of the ticket.
+        :param time_taken: Time worked on the reply in minutes, added to the time worked of the ticket.
+        :param status: Status to set on the ticket after adding the reply, e.g. ``'resolved'`` (requires RT 5.0.2).
+        :param custom_fields: Custom fields of the ticket to set, by name or ID, e.g. ``{'Severity': 'High'}``
+                              (a list of values for custom fields with several values).
+        :param custom_roles: Custom roles of the ticket to set, by name, to a user name or email address (a list of
+                             them for roles with several members), e.g. ``{'Manager': 'alice'}`` (requires RT 5.0.2).
+        :param txn_custom_fields: Custom fields of the transaction of the reply to set, by name or ID.
+        :returns: Status messages of RT, first ``"Correspondence added"``, followed by one for each changed field or role and the
+                  status. RT sets them after adding the reply, so it reports refused values only in these messages,
+                  e.g. ``"Status 'x' isn't a valid status for this ticket."``. RT ignores unknown custom fields and
+                  roles of the ticket.
         :raises BadRequestError: When ticket does not exist
         :raises InvalidUseError: If the `content_type` is not of a supported format.
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
-        msg = await self._correspond(ticket_id, content, 'correspond', content_type, attachments)
+        msg = await self._correspond(
+            ticket_id,
+            content,
+            'correspond',
+            content_type,
+            attachments,
+            extra_fields=self._message_fields(
+                subject=subject,
+                time_taken=time_taken,
+                status=status,
+                custom_fields=custom_fields,
+                custom_roles=custom_roles,
+                txn_custom_fields=txn_custom_fields,
+            ),
+        )
 
         if not msg:
             raise UnexpectedResponseError(str(msg))
@@ -906,6 +1074,12 @@ class AsyncRt:
         *,
         content_type: ContentType = 'text/plain',
         attachments: typing.Sequence[Attachment] | None = None,
+        subject: str | None = None,
+        time_taken: int | None = None,
+        status: str | None = None,
+        custom_fields: collections.abc.Mapping[str, JSONInput] | None = None,
+        custom_roles: collections.abc.Mapping[str, JSONInput] | None = None,
+        txn_custom_fields: collections.abc.Mapping[str, JSONInput] | None = None,
     ) -> list[str]:
         """Adds comment to the given ticket.
 
@@ -915,12 +1089,37 @@ class AsyncRt:
         :param content: Content of comment
         :param content_type: Content type of comment, default to text/plain
         :param attachments: Optional list of :py:class:`~rt.common.Attachment` objects
-        :returns: Status messages of RT, e.g. ``["Comments added"]``.
+        :param subject: Subject of the comment, instead of the subject of the ticket.
+        :param time_taken: Time worked on the comment in minutes, added to the time worked of the ticket.
+        :param status: Status to set on the ticket after adding the comment, e.g. ``'resolved'`` (requires RT 5.0.2).
+        :param custom_fields: Custom fields of the ticket to set, by name or ID, e.g. ``{'Severity': 'High'}``
+                              (a list of values for custom fields with several values).
+        :param custom_roles: Custom roles of the ticket to set, by name, to a user name or email address (a list of
+                             them for roles with several members), e.g. ``{'Manager': 'alice'}`` (requires RT 5.0.2).
+        :param txn_custom_fields: Custom fields of the transaction of the comment to set, by name or ID.
+        :returns: Status messages of RT, first ``"Comments added"``, followed by one for each changed field or role and the
+                  status. RT sets them after adding the comment, so it reports refused values only in these messages,
+                  e.g. ``"Status 'x' isn't a valid status for this ticket."``. RT ignores unknown custom fields and
+                  roles of the ticket.
         :raises BadRequestError: When ticket does not exist
         :raises InvalidUseError: If the `content_type` is not of a supported format.
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
-        msg = await self._correspond(ticket_id, content, 'comment', content_type, attachments)
+        msg = await self._correspond(
+            ticket_id,
+            content,
+            'comment',
+            content_type,
+            attachments,
+            extra_fields=self._message_fields(
+                subject=subject,
+                time_taken=time_taken,
+                status=status,
+                custom_fields=custom_fields,
+                custom_roles=custom_roles,
+                txn_custom_fields=txn_custom_fields,
+            ),
+        )
 
         if not msg:
             raise UnexpectedResponseError(str(msg))
@@ -1832,6 +2031,95 @@ class AsyncRt:
         """
         return self._dict_result(await self._send('GET', _path('catalog', catalog_id)))
 
+    async def get_all_catalogs(self, *, include_disabled: bool = False) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Get all catalogs which the user can see.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param include_disabled: Set to True to also return disabled catalogs.
+        :returns: Iterator of the catalogs, each a dictionary with the keys id, type, _url, Name, Description,
+                  Lifecycle and Disabled.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        params: dict[str, str | int] = {'fields': 'Name,Description,Lifecycle,Disabled', 'find_disabled_rows': int(include_disabled)}
+
+        async for item in self._paged_request('catalogs/all', params=params):
+            yield item
+
+    async def search_catalogs(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        include_disabled: bool = False,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search catalogs.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'Name', 'operator': 'LIKE', 'value': 'Laptops'}]``. All catalogs if not
+                              specified.
+        :param fields: Fields returned for each catalog: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT. By default Name, Description, Lifecycle and Disabled.
+        :param include_disabled: Set to True to also return disabled catalogs.
+        :returns: Iterator of the found catalogs.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        search_params = list(search_params or [])
+        if not search_params:
+            # RT returns no catalog for a search without a condition
+            search_params = [{'field': 'id', 'operator': '>', 'value': 0}]
+
+        params: dict[str, str | int] = {
+            **_fields_params(fields, default_fields='Name,Description,Lifecycle,Disabled'),
+            'find_disabled_rows': int(include_disabled),
+        }
+
+        async for item in self._paged_request('catalogs', json_data=search_params, params=params):
+            yield item
+
+    async def create_catalog(self, name: str, **kwargs: JSONInput) -> int:
+        """Create a catalog.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param name: Name of the catalog, which must be unique.
+        :param kwargs: Other fields to set, e.g. Description or Lifecycle (an asset lifecycle, ``'assets'`` by default).
+        :returns: ID of the new catalog.
+        :raises BadRequestError: If RT rejects the request, e.g. if a catalog with the name exists or the lifecycle
+                                 is invalid.
+        :raises NotAllowedError: If the user is not allowed to create catalogs.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = await self._send('POST', 'catalog', json_data={'Name': name, **kwargs})
+
+        return int(self._created_id(self._dict_result(response)))
+
+    async def edit_catalog(self, catalog_id: str | int, **kwargs: JSONInput) -> list[str]:
+        """Edit a catalog.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param catalog_id: Identification of the catalog by name (str) or ID (int).
+        :param kwargs: Fields to set, e.g. Name, Description, Lifecycle, Disabled. RT ignores unknown fields.
+        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+        :raises NotFoundError: If the catalog does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._list_result(await self._send('PUT', _path('catalog', catalog_id), json_data=kwargs))
+
+    async def delete_catalog(self, catalog_id: str | int) -> None:
+        """Disable a catalog.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param catalog_id: Identification of the catalog by name (str) or ID (int).
+        :raises NotFoundError: If the catalog does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        await self._delete(_path('catalog', catalog_id))
+
     async def get_asset(self, asset_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get asset.
 
@@ -1895,14 +2183,37 @@ class AsyncRt:
         """
         return self._list_result(await self._send('PUT', _path('asset', asset_id), json_data=kwargs))
 
+    async def delete_asset(self, asset_id: str | int) -> None:
+        """Mark an asset as deleted by setting its status to ``deleted``.
+
+        Assets can not be deleted in RT, so the endpoint ``DELETE /asset/:id`` of REST2 always fails
+        (with HTTP status 500), while setting the status works as intended by RT.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param asset_id: Asset ID.
+        :raises NotFoundError: If the asset does not exist.
+        :raises NotAllowedError: If the user is not allowed to change the asset.
+        :raises InvalidUseError: If RT refused to change the status, e.g. if the lifecycle of the catalog does not
+                                 allow it.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        msg = self._list_result(await self._send('PUT', _path('asset', asset_id), json_data={'Status': 'deleted'}))
+
+        # RT returns no message if the asset is already deleted
+        for message in msg:
+            if not message.endswith('Asset deleted'):
+                raise _refusal_error(message)
+
     async def search_assets(
         self,
         *,
         catalog_id: str | int | None = None,
         search_params: collections.abc.Sequence[collections.abc.Mapping[str, JSONInput]] | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
+        raw_query: str | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
-        """Search assets in a catalog.
+        """Search assets in a catalog, with conditions or an AssetSQL query.
 
         Example::
 
@@ -1911,6 +2222,7 @@ class AsyncRt:
             >>> client.search_assets(catalog_id=1, search_params=params, fields="Owner,Status")
             >>> client.search_assets(catalog_id=1, search_params=params, fields=["Owner", "Status"])
             >>> client.search_assets(catalog_id=1, search_params=params, fields={"fields": "Owner,Status", "fields[Owner]": "id,Name"})
+            >>> client.search_assets(raw_query="Catalog = 'General assets' AND 'CF.{Asset Type}' LIKE 'Computer'")
 
         The following is returned for each asset by default (when `fields` is `None`)::
 
@@ -1934,16 +2246,32 @@ class AsyncRt:
 
         :param fields: Fields returned for each asset: a comma separated string or list of fields,
                        or a dictionary with query parameters as defined by RT.
+        :param raw_query: AssetSQL query, used instead of *catalog_id* and *search_params* (requires RT 5.0.2).
+                          It is passed to RT as is, so never include untrusted input in it. RT ignores an invalid
+                          query and then returns all assets (RT 6.0.4).
         :returns: Iterator of the found assets.
+        :raises InvalidUseError: If *raw_query* is empty or combined with *catalog_id* or *search_params*.
         """
+        get_params = _fields_params(fields, default_fields='Owner,Description,Status')
+
+        if raw_query is not None:
+            if catalog_id is not None or search_params is not None:
+                raise InvalidUseError('raw_query can not be combined with catalog_id or search_params.')
+            if not raw_query.strip():
+                # RT would return all assets for an empty query
+                raise InvalidUseError('raw_query must not be empty.')
+
+            # sent in the body like the TicketSQL query of search()
+            async for item in self._paged_request('assets', params=get_params, form_data={'query': raw_query}):
+                yield item
+            return
+
         # copy the search parameters, so the list passed by the caller is not modified
         search_params = list(search_params or [])
         if catalog_id:
             search_params.append({'field': 'Catalog', 'value': catalog_id, 'operator': '='})
         else:
             search_params.append({'field': 'Catalog', 'value': '%', 'operator': 'LIKE'})
-
-        get_params = _fields_params(fields, default_fields='Owner,Description,Status')
 
         async for item in self._paged_request('assets', json_data=search_params, params=get_params):
             yield item
@@ -2053,13 +2381,18 @@ class AsyncRt:
                             ``'RT::User'``, ``'RT::Group'``, ``'RT::Catalog-RT::Asset'`` (assets) or
                             ``'RT::Class-RT::Article'`` (articles).
         :param kwargs: Other fields to set, e.g. Description, MaxValues (0 for unlimited, 1 for a single value),
-                       Pattern, EntryHint, SortOrder, or Queue (name or ID of a single queue to apply the custom field
-                       to, see :py:meth:`apply_custom_field` for more).
+                       Pattern, EntryHint, SortOrder, or Queue (name or ID of a single queue to apply a ticket custom
+                       field to, see :py:meth:`apply_custom_field` for more and for other lookup types).
         :returns: ID of the new custom field.
+        :raises InvalidUseError: If Queue is specified for another lookup type than ``'RT::Queue-RT::Ticket'``,
+                                 as RT would then silently create a ticket custom field.
         :raises BadRequestError: If RT rejects the request, e.g. for an invalid type or an unknown queue.
         :raises NotAllowedError: If the user is not allowed to create custom fields.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        if 'Queue' in kwargs and lookup_type != 'RT::Queue-RT::Ticket':
+            raise InvalidUseError('Queue can only be specified for ticket custom fields, use apply_custom_field() for other lookup types.')
+
         response = await self._send('POST', 'customfield', json_data={'Name': name, 'Type': field_type, 'LookupType': lookup_type, **kwargs})
 
         return int(self._created_id(self._dict_result(response)))

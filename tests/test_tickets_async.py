@@ -28,7 +28,11 @@ __authors__ = [
 ]
 
 import base64
+import json
+import typing
+import urllib.parse
 
+import httpx2
 import pytest
 
 import rt.exceptions
@@ -36,7 +40,7 @@ from rt.common import Attachment
 from rt.rest2_async import AsyncRt
 
 from . import random_string
-from .conftest import RT_QUEUE, RT_USER
+from .conftest import RT_CUSTOM_FIELD, RT_CUSTOM_ROLE, RT_PASSWORD, RT_QUEUE, RT_URL, RT_USER, requires_rt_setup
 
 
 async def test_ticket_attachments(async_rt_connection: AsyncRt):
@@ -92,3 +96,195 @@ async def test_ticket_take(async_rt_connection: AsyncRt):
     # RT only steals tickets owned by another user, the ticket is owned by Nobody now
     with pytest.raises(rt.exceptions.InvalidUseError, match='someone else'):
         await async_rt_connection.steal(ticket_id)
+
+
+# --- fields of replies and comments ----------------------------------------------------------------------------------
+
+
+async def test_reply_and_comment_fields(async_rt_connection: AsyncRt):
+    queue_name = f'queue-{random_string()}'
+    queue_id = await async_rt_connection.create_queue(queue_name)
+    txn_field = f'cf-{random_string()}'
+    txn_field_id = await async_rt_connection.create_custom_field(txn_field, 'Freeform', 'RT::Queue-RT::Ticket-RT::Transaction', MaxValues=1)
+    await async_rt_connection.apply_custom_field(txn_field_id, queue_id)
+    ticket_id = await async_rt_connection.create_ticket(queue_name, subject='Fields of replies', content='Test')
+
+    messages = await async_rt_connection.reply(ticket_id, 'Reply', subject='Other subject', time_taken=5, status='stalled')
+    assert messages[0] == 'Correspondence added'
+    assert any('stalled' in message for message in messages[1:])
+
+    messages = await async_rt_connection.comment(ticket_id, 'Comment', time_taken=3, txn_custom_fields={txn_field: 'value'})
+    assert messages == ['Comments added', 'Custom fields updated']
+
+    ticket = await async_rt_connection.get_ticket(ticket_id)
+    assert ticket['Status'] == 'stalled'
+    assert ticket['TimeWorked'] == '8'
+    history = [item async for item in async_rt_connection.get_ticket_history(ticket_id)]
+    assert [item['Type'] for item in history].count('Correspond') == 1
+
+
+async def test_reply_invalid_status(async_rt_connection: AsyncRt):
+    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Invalid status', content='Test')
+
+    # RT adds the reply and reports the refused status only in the messages
+    messages = await async_rt_connection.reply(ticket_id, 'Reply', status='invalid')
+
+    assert messages[0] == 'Correspondence added'
+    assert "Status 'invalid' isn't a valid status for this ticket." in messages
+
+
+@requires_rt_setup
+async def test_comment_custom_fields_and_roles(async_rt_connection: AsyncRt):
+    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Custom fields of comments', content='Test')
+    value = f"it's {random_string()}"
+
+    messages = await async_rt_connection.comment(ticket_id, 'Comment', custom_fields={RT_CUSTOM_FIELD: value}, custom_roles={RT_CUSTOM_ROLE: RT_USER})
+
+    assert messages[0] == 'Comments added'
+    ticket = await async_rt_connection.get_ticket(ticket_id)
+    assert [field['values'] for field in ticket['CustomFields'] if field['name'] == RT_CUSTOM_FIELD] == [[value]]
+    assert ticket['CustomRoles'][RT_CUSTOM_ROLE]['id'] == RT_USER
+
+
+async def test_reply_fields_are_only_sent_if_specified():
+    bodies: list[dict[str, typing.Any]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.headers['Content-Type'].startswith('multipart/form-data'):
+            # the JSON is sent in the form field JSON together with the attachments
+            content = request.content.decode(errors='replace')
+            bodies.append(json.loads(content.split('name="JSON"', 1)[1].split('\r\n\r\n', 1)[1].split('\r\n--', 1)[0]))
+        else:
+            bodies.append(json.loads(request.content))
+        return httpx2.Response(201, json=['Correspondence added'])
+
+    async with AsyncRt(url=RT_URL, client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler))) as tracker:
+        await tracker.reply(1, 'Text')
+        await tracker.comment(1, 'Text', status='resolved', custom_fields={'Severity': 'High'}, txn_custom_fields={'Notes': 'x'})
+        await tracker.reply(
+            1, 'Text', attachments=[Attachment('a.txt', 'text/plain', b'a')], subject='Subject', time_taken=0, custom_roles={'Manager': ['alice', 'bob']}
+        )
+
+    assert bodies == [
+        {'Content': 'Text', 'ContentType': 'text/plain'},
+        {'Status': 'resolved', 'CustomFields': {'Severity': 'High'}, 'TxnCustomFields': {'Notes': 'x'}, 'Content': 'Text', 'ContentType': 'text/plain'},
+        {'Subject': 'Subject', 'TimeTaken': 0, 'CustomRoles': {'Manager': ['alice', 'bob']}, 'Content': 'Text', 'ContentType': 'text/plain'},
+    ]
+
+
+# --- messages and transactions -------------------------------------------------------------------------------------
+
+
+async def test_get_ticket_messages(async_rt_connection: AsyncRt):
+    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Messages', content='Initial text')
+    await async_rt_connection.reply(ticket_id, '<p>HTML <b>reply</b></p>', content_type='text/html')
+    await async_rt_connection.comment(ticket_id, 'Comment with file', attachments=[Attachment('a.txt', 'text/plain', b'file content')], time_taken=7)
+    await async_rt_connection.comment(ticket_id, attachments=[Attachment('only.bin', 'application/octet-stream', b'\x00\x01')])
+    # no message
+    await async_rt_connection.edit_ticket(ticket_id, Subject='Messages changed')
+
+    messages = [message async for message in async_rt_connection.get_ticket_messages(ticket_id)]
+
+    assert [message['Type'] for message in messages] == ['Create', 'Correspond', 'Comment', 'Comment']
+    assert messages[0]['Content'] == 'Initial text'
+    # RT converts HTML to plain text
+    assert messages[1]['Content'].strip() == 'HTML reply'
+    # attachments are not part of the content
+    assert messages[2]['Content'] == 'Comment with file'
+    assert messages[2]['TimeTaken'] == '7'
+    assert messages[3]['Content'] == ''
+    assert all(message['Creator']['Name'] == RT_USER for message in messages)
+    assert all('EmailAddress' in message['Creator'] for message in messages)
+    assert [int(message['id']) for message in messages] == sorted(int(message['id']) for message in messages)
+
+    # the history (all transactions) and single transactions are still available
+    history = [item async for item in async_rt_connection.get_ticket_history(ticket_id)]
+    assert {item['id'] for item in history} > {message['id'] for message in messages}
+    transaction = await async_rt_connection.get_transaction(messages[2]['id'])
+    assert transaction['Type'] == 'Comment'
+
+
+async def test_get_ticket_messages_all_pages(async_rt_connection: AsyncRt):
+    # not '0', which RT (Perl) takes as no content
+    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Many messages', content='message 0')
+    for number in range(1, 5):
+        await async_rt_connection.comment(ticket_id, f'message {number}')
+
+    async with AsyncRt(url=RT_URL, http_auth=httpx2.BasicAuth(RT_USER, RT_PASSWORD), http_timeout=None, per_page=2) as tracker:
+        contents = [message['Content'] async for message in tracker.get_ticket_messages(ticket_id)]
+
+    assert contents == [f'message {number}' for number in range(5)]
+
+
+async def test_get_ticket_messages_unknown_ticket(async_rt_connection: AsyncRt):
+    assert [message async for message in async_rt_connection.get_ticket_messages(999999)] == []
+
+
+async def test_search_transactions(async_rt_connection: AsyncRt):
+    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Search transactions', content='Initial text')
+    await async_rt_connection.comment(ticket_id, 'first')
+    await async_rt_connection.comment(ticket_id, 'second')
+    await async_rt_connection.reply(ticket_id, 'reply')
+
+    by_conditions = [
+        (item['Type'], item['Content'])
+        async for item in async_rt_connection.search_transactions(
+            search_params=[{'field': 'ObjectId', 'value': ticket_id}, {'field': 'ObjectType', 'value': 'RT::Ticket'}, {'field': 'Type', 'value': 'Comment'}],
+            fields=['Type', 'Content'],
+            order='id',
+        )
+    ]
+    assert by_conditions == [('Comment', 'first'), ('Comment', 'second')]
+
+    by_query = [
+        item['Content']
+        async for item in async_rt_connection.search_transactions(
+            raw_query=f"ObjectType = 'RT::Ticket' AND ObjectId = {ticket_id} AND (Type = 'Comment' OR Type = 'Correspond')",
+            fields='Content',
+            order='-id',
+        )
+    ]
+    assert by_query == ['reply', 'second', 'first']
+
+    default_fields = [item async for item in async_rt_connection.search_transactions(search_params=[{'field': 'ObjectId', 'value': ticket_id}])]
+    assert {'Type', 'Created', 'Creator', 'ObjectType', 'ObjectId'} <= set(default_fields[0])
+
+    with pytest.raises(rt.exceptions.BadRequestError):
+        [item async for item in async_rt_connection.search_transactions(raw_query='Invalid ==== 1')]
+
+
+async def test_search_transactions_request():
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(200, json={'page': 1, 'per_page': 100, 'pages': 0, 'total': 0, 'count': 0, 'items': []})
+
+    async with AsyncRt(url=RT_URL, client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler))) as tracker:
+        [item async for item in tracker.search_transactions(raw_query="Type = 'Comment'", order='-Created')]
+        [item async for item in tracker.search_transactions(search_params=[{'field': 'Type', 'value': 'Comment'}])]
+
+    sql_request, json_request = requests
+    assert sql_request.method == 'POST'
+    assert urllib.parse.parse_qs(sql_request.content.decode()) == {'query': ["Type = 'Comment'"]}
+    assert sql_request.url.params['orderby'] == 'Created'
+    assert sql_request.url.params['order'] == 'DESC'
+    assert json.loads(json_request.content) == [{'field': 'Type', 'value': 'Comment'}]
+
+
+@pytest.mark.parametrize(
+    'arguments',
+    [
+        {},
+        {'search_params': [], 'raw_query': "Type = 'Comment'"},
+        {'raw_query': ''},
+        {'raw_query': '  '},
+    ],
+)
+async def test_search_transactions_invalid_use(arguments: dict[str, typing.Any]):
+    def no_request(request: httpx2.Request) -> httpx2.Response:
+        raise AssertionError('no request must be sent')
+
+    async with AsyncRt(url=RT_URL, client=httpx2.AsyncClient(transport=httpx2.MockTransport(no_request))) as tracker:
+        with pytest.raises(rt.exceptions.InvalidUseError):
+            [item async for item in tracker.search_transactions(**arguments)]

@@ -1185,7 +1185,10 @@ class AsyncRt:
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param ticket_id: ID of ticket
-        :param query_filter: JSON search filter, defaults to "filename is not empty"
+        :param query_filter: JSON search filter, defaults to "filename is not empty". E.g. the files of a single
+                             reply or comment (transaction 42)::
+
+                                 [{'field': 'TransactionId', 'value': 42}, {'field': 'Filename', 'operator': 'IS NOT', 'value': ''}]
         :param fields: Fields returned for each attachment: a comma separated string or list of fields,
                        or a dictionary with query parameters as defined by RT, e.g. ``{'fields[Creator]': 'Name'}``.
                        Defaults to Filename, ContentType and ContentLength.
@@ -1215,7 +1218,10 @@ class AsyncRt:
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param ticket_id: ID of ticket
-        :param query_filter: JSON search filter, defaults to "filename is not empty"
+        :param query_filter: JSON search filter, defaults to "filename is not empty". E.g. the files of a single
+                             reply or comment (transaction 42)::
+
+                                 [{'field': 'TransactionId', 'value': 42}, {'field': 'Filename', 'operator': 'IS NOT', 'value': ''}]
         :returns: Iterator of IDs (type int) of attachments belonging to given
                   ticket.
         """
@@ -1285,6 +1291,52 @@ class AsyncRt:
         :raises NotFoundError: If attachment with specified ID does not exist.
         """
         return self._dict_result(await self._send('GET', _path('attachment', attachment_id)))
+
+    async def search_attachments(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        files_only: bool = True,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search attachments across all tickets, e.g. files by name, content type or creation time.
+
+        Example::
+
+            >>> tracker.search_attachments(search_params=[{'field': 'Filename', 'operator': 'LIKE', 'value': '.pdf'},
+            ...                                           {'field': 'Created', 'operator': '>', 'value': '2024-01-01'}])
+
+        RT stores each message as several attachments: the parts of the email, i.e. a container, the text of the
+        message and each file. By default only files (attachments with a file name) are returned. RT only returns
+        attachments which the user is allowed to see.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param search_params: Conditions of the search as described for :py:meth:`search_assets`, e.g.
+                              ``[{'field': 'ContentType', 'value': 'application/pdf'}]``. Fields which can be searched
+                              are e.g. Filename, ContentType, Subject, Created, Creator and TransactionId, but not
+                              ContentLength (RT computes it, it is not stored). All attachments if not specified.
+        :param fields: Fields returned for each attachment: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT. By default Filename, ContentType, ContentLength,
+                       TransactionId and Created. Use :py:meth:`get_attachment` for the content: RT returns the field
+                       Content in search results not base64 encoded, so binary content can not be represented
+                       reliably. Do not request the field Parent, RT fails with HTTP status 500 for it (RT 6.0.4).
+        :param files_only: Set to False to also return the other parts of messages, e.g. the text of a message.
+        :returns: Iterator of the found attachments.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        conditions = list(search_params or [])
+        if files_only:
+            # combined with AND also with conditions on Filename, which RT would combine with OR by default
+            conditions.append({'field': 'Filename', 'operator': 'IS NOT', 'value': '', 'entry_aggregator': 'AND'})
+        elif not conditions:
+            # RT returns no attachment for a search without a condition
+            conditions = [{'field': 'id', 'operator': '>', 'value': 0}]
+
+        params = _fields_params(fields, default_fields='Filename,ContentType,ContentLength,TransactionId,Created')
+
+        async for item in self._paged_request('attachments', json_data=conditions, params=params):
+            yield item
 
     async def get_user(self, user_id: int | str) -> dict[str, typing.Any]:
         """Get user details.

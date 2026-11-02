@@ -324,6 +324,12 @@ Fetch an attachment by its ID::
 
     c.get_attachment(34)
 
+Search files across all tickets, e.g. by name, content type or creation time (RT only returns those the user is
+allowed to see)::
+
+    c.search_attachments(search_params=[{'field': 'ContentType', 'value': 'application/pdf'},
+                                        {'field': 'Created', 'operator': '>', 'value': '2024-01-01'}])
+
 
 Searching Tickets
 `````````````````

@@ -29,11 +29,14 @@ __authors__ = [
 
 import base64
 
+import pytest
+
+import rt.exceptions
 from rt.common import Attachment
 from rt.rest2_async import AsyncRt
 
 from . import random_string
-from .conftest import RT_QUEUE
+from .conftest import RT_QUEUE, RT_USER
 
 
 async def test_ticket_attachments(async_rt_connection: AsyncRt):
@@ -80,5 +83,12 @@ async def test_ticket_take(async_rt_connection: AsyncRt):
     ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id
 
-    assert await async_rt_connection.take(ticket_id)
-    assert await async_rt_connection.untake(ticket_id)
+    assert await async_rt_connection.take(ticket_id) == [f'Owner changed from Nobody to {RT_USER}']
+    with pytest.raises(rt.exceptions.InvalidUseError, match='already owns'):
+        await async_rt_connection.take(ticket_id)
+
+    assert await async_rt_connection.untake(ticket_id) == [f'Owner changed from {RT_USER} to Nobody']
+
+    # RT only steals tickets owned by another user, the ticket is owned by Nobody now
+    with pytest.raises(rt.exceptions.InvalidUseError, match='someone else'):
+        await async_rt_connection.steal(ticket_id)

@@ -58,7 +58,9 @@ repos:
       - id: mypy
         name: mypy
         entry: uv run mypy
-        files: rt
+        files: ^(rt|tests)/
+        # check the files configured in pyproject.toml instead of only the changed ones
+        pass_filenames: false
         require_serial: true
         language: python
         types: [python]

@@ -2,7 +2,24 @@
 
 
 class RtError(Exception):
-    """Super class of all Rt Errors."""
+    """Super class of all Rt Errors.
+
+    Errors caused by an HTTP response of RT carry its status code and body, other errors have ``None`` set.
+
+    :ivar status_code: HTTP status code of the response from RT.
+    :ivar response_message: Body of the response from RT.
+    """
+
+    def __init__(self, message: str = '', status_code: int | None = None, response_message: str | None = None) -> None:
+        """Initialization.
+
+        :param message: Description of the error.
+        :param status_code: HTTP status code of the response from RT, if the error was caused by one.
+        :param response_message: Body of the response from RT, if the error was caused by one.
+        """
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_message = response_message
 
 
 class AuthorizationError(RtError):
@@ -10,17 +27,14 @@ class AuthorizationError(RtError):
 
 
 class NotAllowedError(RtError):
-    """Exception raised when request cannot be finished due to insufficient privileges."""
+    """Exception raised when request cannot be finished due to insufficient privileges.
+
+    REST2 raises it for HTTP status 403 and if RT refuses an action with "Permission Denied".
+    """
 
 
 class UnexpectedResponseError(RtError):
     """Exception raised when unexpected HTTP code is received."""
-
-    def __init__(self, message: str, status_code: int | None = None, response_message: str | None = None) -> None:
-        """Initialization."""
-        super().__init__(message)
-        self.status_code = status_code
-        self.response_message = response_message
 
 
 class UnexpectedMessageFormatError(RtError):
@@ -38,8 +52,12 @@ class APISyntaxError(RtError):
     """Exception raised when syntax error is received."""
 
 
-class InvalidUseError(RtError):
-    """Exception raised when API method is not used correctly."""
+class InvalidUseError(RtError, ValueError):
+    """Exception raised when API method is not used correctly, or RT refused the requested action.
+
+    It is a subclass of both :py:exc:`RtError` and the builtin :py:exc:`ValueError`,
+    so it can be caught as either of them.
+    """
 
 
 class BadRequestError(RtError):

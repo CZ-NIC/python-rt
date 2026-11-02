@@ -33,10 +33,13 @@ __authors__ = [
 
 import base64
 
+import pytest
+
+import rt.exceptions
 from rt.common import Attachment
 
 from . import random_string
-from .conftest import RT_QUEUE
+from .conftest import RT_QUEUE, RT_USER
 
 
 def test_ticket_attachments(rt_connection: Rt):
@@ -83,5 +86,12 @@ def test_ticket_take(rt_connection: Rt):
     ticket_id = rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id
 
-    assert rt_connection.take(ticket_id)
-    assert rt_connection.untake(ticket_id)
+    assert rt_connection.take(ticket_id) == [f'Owner changed from Nobody to {RT_USER}']
+    with pytest.raises(rt.exceptions.InvalidUseError, match='already owns'):
+        rt_connection.take(ticket_id)
+
+    assert rt_connection.untake(ticket_id) == [f'Owner changed from {RT_USER} to Nobody']
+
+    # RT only steals tickets owned by another user, the ticket is owned by Nobody now
+    with pytest.raises(rt.exceptions.InvalidUseError, match='someone else'):
+        rt_connection.steal(ticket_id)

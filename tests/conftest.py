@@ -1,5 +1,6 @@
 # ruff: noqa: S105
 
+import os
 import typing
 
 import httpx2
@@ -14,6 +15,14 @@ RT_URL = 'http://localhost:8080/REST/2.0/'
 RT_USER = 'root'
 RT_PASSWORD = 'password'
 RT_QUEUE = 'General'
+
+# REST2 can neither create authentication tokens nor apply custom fields to a queue, so tests/rt_setup.pl prepares RT
+# for the tests using them and prints a token, which is passed in the environment variable RT_TOKEN (see the script).
+RT_TOKEN = os.environ.get('RT_TOKEN', '')
+# custom field of the queue RT_QUEUE created by tests/rt_setup.pl, the quote and the space test the quoting
+RT_CUSTOM_FIELD = "python-rt Test's Field"
+
+requires_rt_setup = pytest.mark.skipif(not RT_TOKEN, reason='RT is not prepared by tests/rt_setup.pl (RT_TOKEN is not set)')
 
 
 @pytest.fixture(scope='session')

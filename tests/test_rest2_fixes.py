@@ -13,6 +13,7 @@ import collections.abc
 import datetime as dt
 import json
 import logging
+import pathlib
 import typing
 
 import httpx2
@@ -21,8 +22,8 @@ import pytest
 import rt.exceptions
 from rt.rest2 import Rt
 
-from . import random_string
-from .conftest import RT_PASSWORD, RT_QUEUE, RT_URL, RT_USER
+from . import no_type_checks, random_string
+from .conftest import RT_CUSTOM_FIELD, RT_PASSWORD, RT_QUEUE, RT_TOKEN, RT_URL, RT_USER, requires_rt_setup
 
 UNREACHABLE_URL = 'http://127.0.0.1:1/REST/2.0/'
 
@@ -41,7 +42,7 @@ def _mock_client(handler: typing.Callable[[httpx2.Request], httpx2.Response]) ->
 
 def _page(page: int, items: list, pages: int | None, next_page: bool = False, per_page: int = 100) -> httpx2.Response:
     """Return a paginated response like RT does."""
-    result = {
+    result: dict[str, typing.Any] = {
         'page': page,
         'per_page': per_page,
         'pages': pages,
@@ -87,24 +88,67 @@ def test_search_queue_with_quote(rt_connection: Rt):
 def test_search_custom_field(rt_connection: Rt):
     # previously the query was malformed and RT returned an error
     assert _collect(rt_connection.search(queue=RT_QUEUE, CF_Foo='bar')) == []
-    assert _collect(rt_connection.search(queue=RT_QUEUE, **{'CF_Foo Bar': "it's", 'CF_Foo__like': 'x'})) == []
+    assert _collect(rt_connection.search(queue=RT_QUEUE, conditions={'CF_Foo Bar': "it's", 'CF_Foo__like': 'x'})) == []
+
+
+@requires_rt_setup
+def test_custom_field(rt_connection: Rt):
+    # the name of the custom field contains a quote and a space, the values a quote and a backslash
+    value = f"it's \\ {random_string()}"
+    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Test', content='Test', CustomFields={RT_CUSTOM_FIELD: value})
+    other_id = rt_connection.create_ticket(RT_QUEUE, subject='Test', content='Test')
+
+    def custom_field_values(ticket: dict[str, typing.Any]) -> list[str]:
+        return next(cf['values'] for cf in ticket['CustomFields'] if cf['name'] == RT_CUSTOM_FIELD)
+
+    assert custom_field_values(rt_connection.get_ticket(ticket_id)) == [value]
+    assert custom_field_values(rt_connection.get_ticket(other_id)) == []
+
+    def search(condition: str, search_value: object) -> list[int]:
+        conditions = {f'CF_{RT_CUSTOM_FIELD}{condition}': search_value, 'id__gte': min(ticket_id, other_id)}
+        return sorted([int(ticket['id']) for ticket in rt_connection.search(queue=RT_QUEUE, conditions=conditions, fields='i')])
+
+    assert search('', value) == [ticket_id]
+    assert search('__like', value[-8:]) == [ticket_id]
+    assert search('__notexact', value) == [other_id]
+    assert search('__is', None) == [other_id]
+    assert search('__isnot', None) == [ticket_id]
+
+    new_value = f"o'brien {random_string()}"
+    assert rt_connection.edit_ticket(ticket_id, CustomFields={RT_CUSTOM_FIELD: new_value}) == [f'{RT_CUSTOM_FIELD} {value} changed to {new_value}']
+    assert custom_field_values(rt_connection.get_ticket(ticket_id)) == [new_value]
+    assert search('', value) == []
+    assert search('', new_value) == [ticket_id]
 
 
 def test_search_query_string():
     queries = []
+    orders = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         queries.append(request.url.params['query'])
+        orders.append((request.url.params.get('orderby'), request.url.params.get('order')))
         return _page(1, [], pages=0)
 
     client = _mock_client(handler)
-    _collect(client.search(queue="Gen'eral", Subject='a\\b', CF_Foo='bar', **{'CF_My Field__like': "it's", 'Priority__gt': 5}))
-    _collect(client.search(queue='General', raw_query="Status = 'open'"))
+    _collect(client.search(queue="Gen'eral", conditions={'CF_My Field__like': "it's", 'Priority__gt': 5}, Subject='a\\b', CF_Foo='bar'))
+    _collect(client.search(queue='General', raw_query="Status = 'open'", order='Created', conditions={'Subject': 'ignored'}))
+    _collect(client.search(queue='General', order='-id'))
+    _collect(client.new_correspondence(queue='General'))
 
     assert queries == [
-        "(Queue='Gen\\'eral') AND (Subject='a\\\\b') AND ('CF.{Foo}'='bar') AND ('CF.{My Field}' LIKE 'it\\'s') AND (Priority>'5')",
+        "(Queue='Gen\\'eral') AND ('CF.{My Field}' LIKE 'it\\'s') AND (Priority>'5') AND (Subject='a\\\\b') AND ('CF.{Foo}'='bar')",
         "(Queue='General') AND (Status = 'open')",
+        "(Queue='General')",
+        # RT replaces __CurrentUser__ with the user who executes the search
+        "(Queue='General') AND (LastUpdatedBy!='__CurrentUser__')",
     ]
+    assert orders == [(None, None), ('Created', None), ('id', 'DESC'), ('LastUpdated', 'DESC')]
+
+    # a condition must not be given twice, the values could differ
+    with pytest.raises(rt.exceptions.InvalidUseError, match='Status'):
+        _collect(client.search(conditions={'Status': 'open', 'Subject': 'x'}, Status='new'))
+    assert len(queries) == 4
 
 
 def test_search_operators(rt_connection: Rt):
@@ -112,7 +156,7 @@ def test_search_operators(rt_connection: Rt):
     low = rt_connection.create_ticket(queue=RT_QUEUE, subject=f'alpha-{tag}-op', content='Test', Priority=10)
     high = rt_connection.create_ticket(queue=RT_QUEUE, subject=f'beta-{tag}-op', content='Test', Priority=50)
 
-    def search(**kwargs: object) -> list[int]:
+    def search(**kwargs: typing.Any) -> list[int]:
         return sorted([int(ticket['id']) for ticket in rt_connection.search(queue=RT_QUEUE, Subject__like=tag, **kwargs)])
 
     assert search(Priority__gte=50) == [high]
@@ -128,6 +172,8 @@ def test_search_operators(rt_connection: Rt):
     assert search(Resolved__isnot=None) == []
     assert search(Subject__exact=f'beta-{tag}-op') == [high]
     assert search(Subject__notexact=f'beta-{tag}-op') == [low]
+    # conditions given as mapping are combined with the keyword arguments
+    assert search(conditions={'Priority__gt': 10, 'Subject__endswith': '-op'}) == [high]
 
 
 def test_search_unsupported_operator():
@@ -233,7 +279,8 @@ def test_last_updated_validates_date_immediately(rt_connection: Rt):
     # no await needed, like for all other methods returning multiple results
     assert [int(ticket['id']) for ticket in rt_connection.last_updated('2000-01-02', queue=queue_name)] == [ticket_id]
     assert [int(ticket['id']) for ticket in rt_connection.last_updated('2000-01-02 12:00:00', queue=queue_name)] == [ticket_id]
-    assert [int(ticket['id']) for ticket in rt_connection.new_correspondence(queue=queue_name)] == [ticket_id]
+    # the ticket was last updated by the user of the connection, so it is no new correspondence
+    assert [int(ticket['id']) for ticket in rt_connection.new_correspondence(queue=queue_name)] == []
 
 
 # --- content types and link names --------------------------------------------------------------------------------
@@ -243,11 +290,11 @@ def test_invalid_content_type():
     client = _mock_client(_no_request)
 
     for invalid_content_type in ('text/markdown', 'TEXT/PLAIN', ''):
-        with pytest.raises(ValueError, match='content-type'):
+        with no_type_checks(), pytest.raises(ValueError, match='content-type'):
             client.reply(1, 'Test', content_type=invalid_content_type)  # type: ignore[arg-type]
-        with pytest.raises(ValueError, match='content-type'):
+        with no_type_checks(), pytest.raises(ValueError, match='content-type'):
             client.comment(1, 'Test', content_type=invalid_content_type)  # type: ignore[arg-type]
-        with pytest.raises(ValueError, match='content-type'):
+        with no_type_checks(), pytest.raises(ValueError, match='content-type'):
             client.create_ticket(RT_QUEUE, content='Test', content_type=invalid_content_type)  # type: ignore[arg-type]
 
 
@@ -266,8 +313,24 @@ def test_valid_content_types_are_sent():
 
 
 def test_invalid_link_name():
-    with pytest.raises(rt.exceptions.InvalidUseError, match='Parent, Child, RefersTo, ReferredToBy, DependsOn, DependedOnBy'):
+    with no_type_checks(), pytest.raises(rt.exceptions.InvalidUseError, match='Parent, Child, RefersTo, ReferredToBy, DependsOn, DependedOnBy'):
         _mock_client(_no_request).edit_link(1, 'MemberOf', 2)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ('delete', 'message', 'expected'),
+    [
+        (False, "Link could not be created: Can't link a ticket to itself", rt.exceptions.InvalidUseError),
+        (True, 'Link could not be deleted: Permission Denied', rt.exceptions.InvalidUseError),
+        (False, 'Permission Denied', rt.exceptions.NotAllowedError),
+    ],
+)
+def test_edit_link_failed(delete: bool, message: str, expected: type[rt.exceptions.RtError]):
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=[message])
+
+    with pytest.raises(expected, match=message):
+        _mock_client(handler).edit_link(1, 'DependsOn', 2, delete=delete)
 
 
 # --- error messages of edit operations --------------------------------------------------------------------------
@@ -321,7 +384,7 @@ def test_invalid_per_page(per_page: int):
 
 def test_init_parameters_are_keyword_only():
     with pytest.raises(TypeError):
-        Rt(RT_URL)  # type: ignore[misc]
+        Rt(RT_URL)  # type: ignore[call-arg]
 
 
 def test_paging_with_unknown_page_count():
@@ -354,13 +417,18 @@ def test_paging_with_unknown_page_count_and_no_results():
 def test_paging_stops_if_rt_returns_last_page_again():
     """RT returns the last page again if a page after the last one is requested, e.g. after items were deleted."""
 
+    requested_pages = []
+
     def handler(request: httpx2.Request) -> httpx2.Response:
         page = int(request.url.params['page'])
+        requested_pages.append(page)
         if page == 1:
             return _page(1, [{'id': '1'}], pages=3, per_page=1)
-        return _page(2, [{'id': '2'}], pages=2, per_page=1)  # page 3 vanished meanwhile
+        # page 3 vanished after page 2 was requested, so RT returns page 2 again for page 3
+        return _page(2, [{'id': '2'}], pages=3 if page == 2 else 2, per_page=1)
 
     assert [ticket['id'] for ticket in _mock_client(handler).search()] == ['1', '2']
+    assert requested_pages == [1, 2, 3]
 
 
 def test_paging_unexpected_result():
@@ -375,8 +443,8 @@ def test_search_assets_does_not_modify_search_params(rt_connection: Rt):
     search_params = [{'field': 'Name', 'value': f'nonexistent {random_string()}'}]
     expected = [dict(param) for param in search_params]
 
-    assert _collect(rt_connection.search_assets(None, search_params)) == []
-    assert _collect(rt_connection.search_assets(1, search_params)) == []
+    assert _collect(rt_connection.search_assets(search_params=search_params)) == []
+    assert _collect(rt_connection.search_assets(catalog_id=1, search_params=search_params)) == []
 
     assert search_params == expected
 
@@ -404,7 +472,7 @@ def test_invalid_json_response():
 
 
 def test_delete_response_handling():
-    responses = []
+    responses: list[httpx2.Response] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         return responses.pop(0)
@@ -412,10 +480,10 @@ def test_delete_response_handling():
     client = _mock_client(handler)
 
     responses.append(httpx2.Response(204))
-    assert client.delete_ticket(1) is None
+    client.delete_ticket(1)
 
     responses.append(httpx2.Response(200, json=['Ticket deleted']))
-    assert client.delete_user('user') is None
+    client.delete_user('user')
 
     responses.append(httpx2.Response(200, text='<html>Login</html>'))
     with pytest.raises(rt.exceptions.UnexpectedResponseError):
@@ -482,6 +550,7 @@ def test_bad_request_messages():
         httpx2.Response(400, json={'message': 'Invalid value'}),
         httpx2.Response(400, json={'unexpected': 'format'}),
         httpx2.Response(400, text='<html>Bad request</html>'),
+        httpx2.Response(400, json=['Invalid', 'values']),
     ]
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -495,6 +564,101 @@ def test_bad_request_messages():
         client.get_ticket(1)
     with pytest.raises(rt.exceptions.BadRequestError, match='Bad request'):
         client.get_ticket(1)
+    with pytest.raises(rt.exceptions.BadRequestError, match='Invalid'):
+        client.get_ticket(1)
+
+
+@pytest.mark.parametrize(
+    ('response', 'expected'),
+    [
+        (httpx2.Response(401), rt.exceptions.AuthorizationError),
+        (httpx2.Response(403, json={'message': 'Forbidden'}), rt.exceptions.NotAllowedError),
+        (httpx2.Response(404), rt.exceptions.NotFoundError),
+        (httpx2.Response(500, text='Internal Server Error'), rt.exceptions.UnexpectedResponseError),
+        (httpx2.Response(302, headers={'Location': 'http://localhost/login'}), rt.exceptions.UnexpectedResponseError),
+        (httpx2.ReadTimeout('timed out'), rt.exceptions.RtConnectionError),
+    ],
+)
+def test_error_responses(response: httpx2.Response | httpx2.TransportError, expected: type[rt.exceptions.RtError]):
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    with pytest.raises(expected) as exc_info:
+        _mock_client(handler).get_ticket(1)
+
+    if isinstance(response, httpx2.Response):
+        # errors caused by a response of RT carry its status code and body
+        assert exc_info.value.status_code == response.status_code
+        assert exc_info.value.response_message == response.text
+    else:
+        assert isinstance(exc_info.value, rt.exceptions.RtConnectionError)
+        assert exc_info.value.cause is response
+        assert exc_info.value.status_code is None
+
+
+def test_forbidden_message():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(403, json={'message': "No permission to create tickets in the queue 'General'"})
+
+    with pytest.raises(rt.exceptions.NotAllowedError, match='No permission to create tickets') as exc_info:
+        _mock_client(handler).create_ticket(RT_QUEUE, subject='x')
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ('message', 'expected'),
+    [
+        ('That user already owns that ticket', rt.exceptions.InvalidUseError),
+        ('You can only steal a ticket owned by someone else', rt.exceptions.InvalidUseError),
+        ('Permission Denied', rt.exceptions.NotAllowedError),
+    ],
+)
+def test_owner_change_refused(message: str, expected: type[Exception]):
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=[message])
+
+    with pytest.raises(expected, match=message):
+        _mock_client(handler).take(1)
+
+
+@pytest.mark.parametrize(
+    ('message', 'expected'),
+    [
+        ("New ticket doesn't exist", rt.exceptions.NotFoundError),
+        ("Can't merge a ticket into itself", rt.exceptions.InvalidUseError),
+        ('Only tickets can be merged', rt.exceptions.InvalidUseError),
+        ('Permission Denied', rt.exceptions.NotAllowedError),
+    ],
+)
+def test_merge_refused(message: str, expected: type[Exception]):
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=[message])
+
+    with pytest.raises(expected, match=message):
+        _mock_client(handler).merge_ticket(1, 2)
+
+
+def test_unexpected_number_of_status_messages():
+    messages: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=messages)
+
+    client = _mock_client(handler)
+
+    # RT returns no status message if nothing was changed
+    assert client.edit_ticket(1, Subject='unchanged') == []
+
+    for action in (lambda: client.reply(1, 'x'), lambda: client.comment(1, 'x'), lambda: client.merge_ticket(1, 2), lambda: client.steal(1)):
+        with pytest.raises(rt.exceptions.UnexpectedResponseError):
+            action()
+
+    messages.extend(['Merge Successful', 'Owner changed from Nobody to root'])
+    for action in (lambda: client.merge_ticket(1, 2), lambda: client.take(1)):
+        with pytest.raises(rt.exceptions.UnexpectedResponseError):
+            action()
 
 
 # --- connection handling ---------------------------------------------------------------------------------------
@@ -519,6 +683,24 @@ def test_close():
 def test_token_and_http_auth_are_exclusive():
     with pytest.raises(ValueError, match='either'):
         Rt(url=RT_URL, http_auth=httpx2.BasicAuth(RT_USER, RT_PASSWORD), token='secret')
+
+
+@requires_rt_setup
+def test_token_authentication(caplog: pytest.LogCaptureFixture):
+    with Rt(url=RT_URL, token=RT_TOKEN) as tracker:
+        with caplog.at_level(logging.DEBUG, logger=Rt.__module__):
+            assert (tracker.get_user(RT_USER))['Name'] == RT_USER
+            assert _collect(tracker.search(queue=RT_QUEUE, id=0)) == []
+
+    assert RT_TOKEN not in caplog.text
+    assert '[redacted]' in caplog.text
+
+    # an unknown token of the same form is rejected
+    owner, _, _ = RT_TOKEN.rpartition('-')
+    with Rt(url=RT_URL, token=f'{owner}-{"0" * 32}') as tracker:
+        with pytest.raises(rt.exceptions.AuthorizationError) as exc_info:
+            tracker.get_user(RT_USER)
+    assert exc_info.value.status_code == 401
 
 
 def test_connection_error():
@@ -552,6 +734,12 @@ def test_own_client():
         assert tracker.user_exists(RT_USER)
 
     http_client.close()
+
+
+def test_verify_cert_ca_bundle(tmp_path: pathlib.Path):
+    # a path is used as CA bundle, so it must exist
+    with pytest.raises(FileNotFoundError):
+        Rt(url=RT_URL, http_auth=httpx2.BasicAuth(RT_USER, RT_PASSWORD), verify_cert=str(tmp_path / 'missing-ca.pem'))
 
 
 @pytest.mark.parametrize(

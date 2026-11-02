@@ -206,6 +206,8 @@ while the other fields are changed anyway.
 
 All optional arguments of the methods must be passed by keyword.
 
+The docstrings of the methods state the minimum RT version they require.
+
 
 Searching for tickets with status *new* in the *General* queue::
 
@@ -366,8 +368,6 @@ or ``'2024-01-31 12:00:00'`` are interpreted by RT in the timezone of the RT use
 
 Users and Groups
 ````````````````
-The docstrings of the methods state the minimum RT version they require.
-
 Users and groups are searched with conditions like assets (all if none are given), e.g. the privileged users
 of a domain::
 

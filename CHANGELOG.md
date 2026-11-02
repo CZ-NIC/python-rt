@@ -236,7 +236,8 @@ Python 3.11 or newer is required.
   (the latter three RT 6.0.3 or newer), `get_custom_field_values()`, `get_custom_field_value()`,
   `add_custom_field_value()`, `edit_custom_field_value()`, `delete_custom_field_value()` and
   `get_custom_field_file()`.
-- The docstrings of the new REST2 methods state the minimum RT version they require.
+- The docstrings of all REST2 methods state the minimum RT version they require, e.g. `take()`, `untake()`,
+  `steal()` and `get_attachments()` require RT 5.0.1.
 - REST2 `get_system_info()` returns the RT version and plugins.
 - Add `rt.exceptions.ConflictError`, which REST2 raises for HTTP status 409 (e.g. when granting a right which is
   already granted) with the message of RT. It is a subclass of `UnexpectedResponseError`, which was raised before,

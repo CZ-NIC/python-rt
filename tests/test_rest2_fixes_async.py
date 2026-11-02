@@ -22,7 +22,7 @@ import rt.exceptions
 from rt.rest2_async import AsyncRt
 
 from . import no_type_checks, random_string
-from .conftest import RT_CUSTOM_FIELD, RT_PASSWORD, RT_QUEUE, RT_TOKEN, RT_URL, RT_USER, requires_rt_setup
+from .conftest import RT_CUSTOM_FIELD, RT_CUSTOM_ROLE, RT_PASSWORD, RT_QUEUE, RT_TOKEN, RT_URL, RT_USER, requires_rt_setup
 
 UNREACHABLE_URL = 'http://127.0.0.1:1/REST/2.0/'
 
@@ -139,7 +139,7 @@ async def test_search_query_string():
 
     client = _mock_client(handler)
     await _collect(client.search(queue="Gen'eral", conditions={'CF_My Field__like': "it's", 'Priority__gt': 5}, Subject='a\\b', CF_Foo='bar'))
-    await _collect(client.search(queue='General', raw_query="Status = 'open'", order='Created', conditions={'Subject': 'ignored'}))
+    await _collect(client.search(queue='General', raw_query="Status = 'open'", order='Created'))
     await _collect(client.search(queue='General', order='-id'))
     await _collect(client.new_correspondence(queue='General'))
 
@@ -715,7 +715,7 @@ async def test_context_manager():
 
 async def test_close():
     tracker = AsyncRt(url=RT_URL, http_auth=httpx2.BasicAuth(RT_USER, RT_PASSWORD))
-    assert await tracker.user_exists(RT_USER)
+    assert await tracker.user_exists(RT_USER, privileged=True)
 
     await tracker.aclose()
 
@@ -773,7 +773,7 @@ async def test_own_client():
     assert not http_client.is_closed
 
     async with AsyncRt(url=RT_URL, client=http_client) as tracker:
-        assert await tracker.user_exists(RT_USER)
+        assert await tracker.user_exists(RT_USER, privileged=True)
 
     await http_client.aclose()
 
@@ -830,21 +830,26 @@ async def test_no_debug_log_if_disabled(caplog: pytest.LogCaptureFixture):
 
 
 async def test_user_exists(async_rt_connection: AsyncRt):
-    assert await async_rt_connection.user_exists(RT_USER)
-    assert not await async_rt_connection.user_exists(f'nosuchuser{random_string()}')
+    assert await async_rt_connection.user_exists(RT_USER, privileged=True)
+    assert not await async_rt_connection.user_exists(f'nosuchuser{random_string()}', privileged=True)
     assert not await async_rt_connection.user_exists(f'nosuchuser{random_string()}', privileged=False)
 
     unprivileged_user = f'user_{random_string()}'
     await async_rt_connection.create_user(unprivileged_user, f'{unprivileged_user}@example.com', Privileged=0)
-    assert not await async_rt_connection.user_exists(unprivileged_user)
+    assert not await async_rt_connection.user_exists(unprivileged_user, privileged=True)
     assert await async_rt_connection.user_exists(unprivileged_user, privileged=False)
+
+
+async def test_user_exists_privileged_is_required():
+    with no_type_checks(), pytest.raises(TypeError):
+        await _mock_client(_no_request).user_exists('root')  # type: ignore[call-arg]
 
 
 async def test_user_exists_privileged_as_string():
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, content=json.dumps({'id': 1, 'Privileged': '1'}))
 
-    assert await _mock_client(handler).user_exists('root')
+    assert await _mock_client(handler).user_exists('root', privileged=True)
 
 
 async def test_invalid_fields(async_rt_connection: AsyncRt):
@@ -856,3 +861,114 @@ async def test_invalid_fields(async_rt_connection: AsyncRt):
         await async_rt_connection.create_queue('queue', Foo=1)
     with pytest.raises(rt.exceptions.InvalidUseError, match='Unsupported names of fields: Foo.'):
         await async_rt_connection.edit_queue(RT_QUEUE, Foo=1)
+
+
+# --- review of the major release -----------------------------------------------------------------------------------
+
+
+async def test_search_field_names_are_quoted():
+    queries = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        queries.append(_query(request))
+        return _page(1, [], pages=0)
+
+    client = _mock_client(handler)
+    # plain names are used as they are, other names are quoted, so they can not change the meaning of the query
+    await _collect(client.search(conditions={'Requestor.EmailAddress__like': 'a', 'CustomRole.{Some Role}': 'b', "Subject='x') OR (id": 1}))
+
+    assert queries == ["(Requestor.EmailAddress LIKE 'a') AND ('CustomRole.{Some Role}'='b') AND ('Subject=\\'x\\') OR (id'='1')"]
+
+
+@requires_rt_setup
+async def test_search_custom_role(async_rt_connection: AsyncRt):
+    ticket_id = await async_rt_connection.create_ticket(
+        RT_QUEUE, subject=f'Custom role {random_string()}', content='Test', CustomRoles={RT_CUSTOM_ROLE: RT_USER}
+    )
+
+    found = [
+        int(ticket['id'])
+        async for ticket in async_rt_connection.search(queue=RT_QUEUE, conditions={f'CustomRole.{{{RT_CUSTOM_ROLE}}}.Name': RT_USER, 'id': ticket_id})
+    ]
+
+    assert found == [ticket_id]
+
+
+async def test_search_raw_query_with_conditions():
+    client = _mock_client(_no_request)
+
+    with pytest.raises(rt.exceptions.InvalidUseError, match='raw_query'):
+        await _collect(client.search(raw_query="Status = 'open'", Subject='x'))
+    with pytest.raises(rt.exceptions.InvalidUseError, match='raw_query'):
+        await _collect(client.search(raw_query="Status = 'open'", conditions={'Subject': 'x'}))
+
+
+async def test_search_assets_catalog_condition(async_rt_connection: AsyncRt):
+    catalog_name = f'catalog-{random_string()}'
+    catalog_id = await async_rt_connection.create_catalog(catalog_name)
+    asset_id = await async_rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
+    # assets in other catalogs exist, e.g. of other tests
+    await async_rt_connection.create_asset(f'asset-{random_string()}', 1)
+
+    # previously RT combined the catalog conditions with OR and returned the assets of all catalogs
+    by_condition = [int(asset['id']) async for asset in async_rt_connection.search_assets(search_params=[{'field': 'Catalog', 'value': catalog_id}])]
+    by_catalog_id = [int(asset['id']) async for asset in async_rt_connection.search_assets(catalog_id=catalog_id)]
+    both = [int(asset['id']) async for asset in async_rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Catalog', 'value': catalog_id}])]
+
+    assert by_condition == by_catalog_id == [asset_id]
+    assert both == []
+    assert len([asset async for asset in async_rt_connection.search_assets()]) > 1
+
+
+async def test_get_links_external(async_rt_connection: AsyncRt):
+    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='External link', content='Test')
+    other_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Linked ticket', content='Test')
+    await async_rt_connection.edit_link(ticket_id, 'RefersTo', 'https://example.com/document')
+    await async_rt_connection.edit_link(ticket_id, 'DependsOn', other_id)
+
+    links = sorted((link['ref'], link['type'], link['_url']) for link in await async_rt_connection.get_links(ticket_id))
+
+    assert links == [('depends-on', 'ticket', f'{RT_URL}ticket/{other_id}'), ('refers-to', 'external', 'https://example.com/document')]
+
+
+async def test_edit_queue_fields(async_rt_connection: AsyncRt):
+    queue_name = f'queue-{random_string()}'
+    queue_id = await async_rt_connection.create_queue(queue_name, SubjectTag='tag')
+    field_name = f'cf-{random_string()}'
+    field_id = await async_rt_connection.create_custom_field(field_name, 'Freeform', 'RT::Queue', MaxValues=1)
+    await async_rt_connection.apply_custom_field(field_id, queue_id)
+
+    messages = await async_rt_connection.edit_queue(queue_id, SubjectTag='other', CustomFields={field_name: 'value'}, AdminCc=RT_USER)
+
+    assert len(messages) == 3
+    queue = await async_rt_connection.get_queue(queue_id)
+    assert queue['SubjectTag'] == 'other'
+    assert [field['values'] for field in queue['CustomFields'] if field['name'] == field_name] == [['value']]
+    assert [watcher['id'] for watcher in queue['AdminCc']] == [RT_USER]
+
+
+async def test_create_ticket_queue_id(async_rt_connection: AsyncRt):
+    queue_id = int((await async_rt_connection.get_queue(RT_QUEUE))['id'])
+
+    ticket_id = await async_rt_connection.create_ticket(queue_id, subject='Queue by ID', content='Test')
+
+    assert (await async_rt_connection.get_ticket(ticket_id))['Queue']['Name'] == RT_QUEUE
+
+
+async def test_not_found_on_edit(async_rt_connection: AsyncRt):
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.edit_user(f'missing-{random_string()}', RealName='x')
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.edit_queue(999999, Description='x')
+
+
+async def test_unexpected_status_message():
+    client = _mock_client(lambda request: httpx2.Response(500, json={'message': 'Internal Server Error'}))
+
+    with pytest.raises(rt.exceptions.UnexpectedResponseError, match='Received status code 500 instead of 200: Internal Server Error') as exc_info:
+        await client.get_ticket(1)
+    assert exc_info.value.status_code == 500
+
+    client = _mock_client(lambda request: httpx2.Response(502, text=''))
+    with pytest.raises(rt.exceptions.UnexpectedResponseError, match=r'Received status code 502 instead of 200\.$'):
+        await client.get_ticket(1)

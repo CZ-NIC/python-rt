@@ -24,7 +24,7 @@ import rt.exceptions
 from rt.rest2 import Rt
 
 from . import no_type_checks, random_string
-from .conftest import RT_CUSTOM_FIELD, RT_PASSWORD, RT_QUEUE, RT_TOKEN, RT_URL, RT_USER, requires_rt_setup
+from .conftest import RT_CUSTOM_FIELD, RT_CUSTOM_ROLE, RT_PASSWORD, RT_QUEUE, RT_TOKEN, RT_URL, RT_USER, requires_rt_setup
 
 UNREACHABLE_URL = 'http://127.0.0.1:1/REST/2.0/'
 
@@ -141,7 +141,7 @@ def test_search_query_string():
 
     client = _mock_client(handler)
     _collect(client.search(queue="Gen'eral", conditions={'CF_My Field__like': "it's", 'Priority__gt': 5}, Subject='a\\b', CF_Foo='bar'))
-    _collect(client.search(queue='General', raw_query="Status = 'open'", order='Created', conditions={'Subject': 'ignored'}))
+    _collect(client.search(queue='General', raw_query="Status = 'open'", order='Created'))
     _collect(client.search(queue='General', order='-id'))
     _collect(client.new_correspondence(queue='General'))
 
@@ -717,7 +717,7 @@ def test_context_manager():
 
 def test_close():
     tracker = Rt(url=RT_URL, http_auth=httpx2.BasicAuth(RT_USER, RT_PASSWORD))
-    assert tracker.user_exists(RT_USER)
+    assert tracker.user_exists(RT_USER, privileged=True)
 
     tracker.close()
 
@@ -775,7 +775,7 @@ def test_own_client():
     assert not http_client.is_closed
 
     with Rt(url=RT_URL, client=http_client) as tracker:
-        assert tracker.user_exists(RT_USER)
+        assert tracker.user_exists(RT_USER, privileged=True)
 
     http_client.close()
 
@@ -832,21 +832,26 @@ def test_no_debug_log_if_disabled(caplog: pytest.LogCaptureFixture):
 
 
 def test_user_exists(rt_connection: Rt):
-    assert rt_connection.user_exists(RT_USER)
-    assert not rt_connection.user_exists(f'nosuchuser{random_string()}')
+    assert rt_connection.user_exists(RT_USER, privileged=True)
+    assert not rt_connection.user_exists(f'nosuchuser{random_string()}', privileged=True)
     assert not rt_connection.user_exists(f'nosuchuser{random_string()}', privileged=False)
 
     unprivileged_user = f'user_{random_string()}'
     rt_connection.create_user(unprivileged_user, f'{unprivileged_user}@example.com', Privileged=0)
-    assert not rt_connection.user_exists(unprivileged_user)
+    assert not rt_connection.user_exists(unprivileged_user, privileged=True)
     assert rt_connection.user_exists(unprivileged_user, privileged=False)
+
+
+def test_user_exists_privileged_is_required():
+    with no_type_checks(), pytest.raises(TypeError):
+        _mock_client(_no_request).user_exists('root')  # type: ignore[call-arg]
 
 
 def test_user_exists_privileged_as_string():
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, content=json.dumps({'id': 1, 'Privileged': '1'}))
 
-    assert _mock_client(handler).user_exists('root')
+    assert _mock_client(handler).user_exists('root', privileged=True)
 
 
 def test_invalid_fields(rt_connection: Rt):
@@ -858,3 +863,111 @@ def test_invalid_fields(rt_connection: Rt):
         rt_connection.create_queue('queue', Foo=1)
     with pytest.raises(rt.exceptions.InvalidUseError, match='Unsupported names of fields: Foo.'):
         rt_connection.edit_queue(RT_QUEUE, Foo=1)
+
+
+# --- review of the major release -----------------------------------------------------------------------------------
+
+
+def test_search_field_names_are_quoted():
+    queries = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        queries.append(_query(request))
+        return _page(1, [], pages=0)
+
+    client = _mock_client(handler)
+    # plain names are used as they are, other names are quoted, so they can not change the meaning of the query
+    _collect(client.search(conditions={'Requestor.EmailAddress__like': 'a', 'CustomRole.{Some Role}': 'b', "Subject='x') OR (id": 1}))
+
+    assert queries == ["(Requestor.EmailAddress LIKE 'a') AND ('CustomRole.{Some Role}'='b') AND ('Subject=\\'x\\') OR (id'='1')"]
+
+
+@requires_rt_setup
+def test_search_custom_role(rt_connection: Rt):
+    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject=f'Custom role {random_string()}', content='Test', CustomRoles={RT_CUSTOM_ROLE: RT_USER})
+
+    found = [
+        int(ticket['id']) for ticket in rt_connection.search(queue=RT_QUEUE, conditions={f'CustomRole.{{{RT_CUSTOM_ROLE}}}.Name': RT_USER, 'id': ticket_id})
+    ]
+
+    assert found == [ticket_id]
+
+
+def test_search_raw_query_with_conditions():
+    client = _mock_client(_no_request)
+
+    with pytest.raises(rt.exceptions.InvalidUseError, match='raw_query'):
+        _collect(client.search(raw_query="Status = 'open'", Subject='x'))
+    with pytest.raises(rt.exceptions.InvalidUseError, match='raw_query'):
+        _collect(client.search(raw_query="Status = 'open'", conditions={'Subject': 'x'}))
+
+
+def test_search_assets_catalog_condition(rt_connection: Rt):
+    catalog_name = f'catalog-{random_string()}'
+    catalog_id = rt_connection.create_catalog(catalog_name)
+    asset_id = rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
+    # assets in other catalogs exist, e.g. of other tests
+    rt_connection.create_asset(f'asset-{random_string()}', 1)
+
+    # previously RT combined the catalog conditions with OR and returned the assets of all catalogs
+    by_condition = [int(asset['id']) for asset in rt_connection.search_assets(search_params=[{'field': 'Catalog', 'value': catalog_id}])]
+    by_catalog_id = [int(asset['id']) for asset in rt_connection.search_assets(catalog_id=catalog_id)]
+    both = [int(asset['id']) for asset in rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Catalog', 'value': catalog_id}])]
+
+    assert by_condition == by_catalog_id == [asset_id]
+    assert both == []
+    assert len([asset for asset in rt_connection.search_assets()]) > 1
+
+
+def test_get_links_external(rt_connection: Rt):
+    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='External link', content='Test')
+    other_id = rt_connection.create_ticket(RT_QUEUE, subject='Linked ticket', content='Test')
+    rt_connection.edit_link(ticket_id, 'RefersTo', 'https://example.com/document')
+    rt_connection.edit_link(ticket_id, 'DependsOn', other_id)
+
+    links = sorted((link['ref'], link['type'], link['_url']) for link in rt_connection.get_links(ticket_id))
+
+    assert links == [('depends-on', 'ticket', f'{RT_URL}ticket/{other_id}'), ('refers-to', 'external', 'https://example.com/document')]
+
+
+def test_edit_queue_fields(rt_connection: Rt):
+    queue_name = f'queue-{random_string()}'
+    queue_id = rt_connection.create_queue(queue_name, SubjectTag='tag')
+    field_name = f'cf-{random_string()}'
+    field_id = rt_connection.create_custom_field(field_name, 'Freeform', 'RT::Queue', MaxValues=1)
+    rt_connection.apply_custom_field(field_id, queue_id)
+
+    messages = rt_connection.edit_queue(queue_id, SubjectTag='other', CustomFields={field_name: 'value'}, AdminCc=RT_USER)
+
+    assert len(messages) == 3
+    queue = rt_connection.get_queue(queue_id)
+    assert queue['SubjectTag'] == 'other'
+    assert [field['values'] for field in queue['CustomFields'] if field['name'] == field_name] == [['value']]
+    assert [watcher['id'] for watcher in queue['AdminCc']] == [RT_USER]
+
+
+def test_create_ticket_queue_id(rt_connection: Rt):
+    queue_id = int((rt_connection.get_queue(RT_QUEUE))['id'])
+
+    ticket_id = rt_connection.create_ticket(queue_id, subject='Queue by ID', content='Test')
+
+    assert (rt_connection.get_ticket(ticket_id))['Queue']['Name'] == RT_QUEUE
+
+
+def test_not_found_on_edit(rt_connection: Rt):
+    with pytest.raises(rt.exceptions.NotFoundError):
+        rt_connection.edit_user(f'missing-{random_string()}', RealName='x')
+    with pytest.raises(rt.exceptions.NotFoundError):
+        rt_connection.edit_queue(999999, Description='x')
+
+
+def test_unexpected_status_message():
+    client = _mock_client(lambda request: httpx2.Response(500, json={'message': 'Internal Server Error'}))
+
+    with pytest.raises(rt.exceptions.UnexpectedResponseError, match='Received status code 500 instead of 200: Internal Server Error') as exc_info:
+        client.get_ticket(1)
+    assert exc_info.value.status_code == 500
+
+    client = _mock_client(lambda request: httpx2.Response(502, text=''))
+    with pytest.raises(rt.exceptions.UnexpectedResponseError, match=r'Received status code 502 instead of 200\.$'):
+        client.get_ticket(1)

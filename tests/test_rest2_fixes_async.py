@@ -701,9 +701,12 @@ async def test_merge_refused(message: str, expected: type[Exception]):
         await _mock_client(handler).merge_ticket(1, 2)
 
 
-@pytest.mark.parametrize('message', ['Ein neuer Text von RT', 'Besitzer geändert von Nobody zu root', 'Something RT has not said before'])
-async def test_unrecognized_message_is_no_error(message: str):
-    """RT answers with HTTP status 200 also for refusals, so a message which is not known is no error."""
+UNRECOGNIZED_MESSAGES = ['Ein neuer Text von RT', 'Besitzer geändert von Nobody zu root', 'Something RT has not said before']
+
+
+@pytest.mark.parametrize('message', UNRECOGNIZED_MESSAGES)
+async def test_unrecognized_message_is_no_error_for_changes_made_partly(message: str):
+    """RT answers with HTTP status 200 also for refusals, so a message which is not known does not raise for edits, replies, ..."""
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(201 if request.method == 'POST' else 200, json=[message])
@@ -711,12 +714,6 @@ async def test_unrecognized_message_is_no_error(message: str):
     client = _mock_client(handler)
 
     for action in (
-        lambda: client.take(1),
-        lambda: client.untake(1),
-        lambda: client.steal(1),
-        lambda: client.merge_ticket(1, 2),
-        lambda: client.edit_link(1, 'RefersTo', 2),
-        lambda: client.add_group_member(1, 2),
         lambda: client.edit_ticket(1, Subject='x'),
         lambda: client.edit_user('root', RealName='x'),
         lambda: client.reply(1, 'x'),
@@ -731,7 +728,53 @@ async def test_unrecognized_message_is_no_error(message: str):
         result.raise_for_refused()
 
 
+@pytest.mark.parametrize('message', UNRECOGNIZED_MESSAGES)
+async def test_unrecognized_message_fails_actions(message: str):
+    """The message is the only information about the result of an action: if it is not known, the action may not have been made."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=[message])
+
+    client = _mock_client(handler)
+
+    for action in (
+        lambda: client.take(1),
+        lambda: client.untake(1),
+        lambda: client.steal(1),
+        lambda: client.merge_ticket(1, 2),
+        lambda: client.edit_link(1, 'RefersTo', 2),
+        lambda: client.edit_asset_link(1, 'RefersTo', 2),
+        lambda: client.add_group_member(1, 2),
+    ):
+        # not InvalidUseError: RT did not refuse the action as far as the library knows
+        with pytest.raises(rt.exceptions.UnexpectedResponseError, match='not known to the library') as exc_info:
+            await action()
+
+        assert not isinstance(exc_info.value, rt.exceptions.InvalidUseError)
+        assert message in str(exc_info.value)
+
+
+@pytest.mark.parametrize('message', UNRECOGNIZED_MESSAGES)
+async def test_unrecognized_message_is_no_error_if_rt_tells_the_result(message: str):
+    """RT tells the result of adding a user to a group with a status, and of applying a custom field with the HTTP status."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path.endswith('/groups'):
+            return httpx2.Response(200, json=[1, message])
+        return httpx2.Response(201, json={'message': message})
+
+    client = _mock_client(handler)
+
+    for action in (lambda: client.add_user_to_group('root', 1), lambda: client.apply_custom_field(1, 2)):
+        result = await action()
+
+        assert result
+        assert result.unrecognized == (message,)
+
+
 async def test_known_refusal_raises_for_actions_only():
+    """A known refusal raises for actions, as nothing was changed, but not for edits, as parts of them were made."""
+
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, json=['That user does not exist'])
 

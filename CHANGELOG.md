@@ -95,8 +95,10 @@ Python 3.11 or newer is required.
   `if tracker.comment(...)` keeps working; `result.complete`, `result.refused`, `result.unrecognized` and
   `result.messages` give the details, and `result.raise_for_refused()` raises `NotFoundError`, `NotAllowedError` or
   `InvalidUseError` for refused parts. The messages are classified with a catalog of the messages of RT
-  (`rt/_messages.py`); a message which is not in the catalog (newer RT, other language) never raises, it is listed in
-  `result.unrecognized`. Code checking the result with `is True` must be changed.
+  (`rt/_messages.py`); a message which is not in the catalog (newer RT, other language) is listed in
+  `result.unrecognized` and does not raise for `edit_*()`, `reply()` and `comment()`. `take()`, `untake()`, `steal()`,
+  `merge_ticket()`, `edit_link()`, `edit_asset_link()` and `add_group_member()` raise `UnexpectedResponseError` for it,
+  as the message is the only information about their result. Code checking the result with `is True` must be changed.
   Refused parts of `edit_*()` are not raised anymore (before, only a nonexistent user or queue was).
   The methods changing one thing raise an exception if RT refuses the change (nothing was changed):
 

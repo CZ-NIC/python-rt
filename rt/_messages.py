@@ -113,6 +113,8 @@ MESSAGES: dict[str, Kind] = {
     "Couldn't find that principal": N,
     "Couldn't find that value": N,
     "Couldn't resolve '%1' into a link.": N,
+    "Couldn't resolve base '%1' into a URI.": N,
+    "Couldn't resolve target '%1' into a URI.": N,
     "Couldn't load Custom Field #%1": N,
     'Custom field %1 not found': N,
     'Custom field value %1 could not be found for custom field %2': N,

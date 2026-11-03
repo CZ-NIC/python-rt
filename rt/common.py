@@ -336,8 +336,10 @@ class ActionResult:
     made. Use :py:attr:`complete`, :py:attr:`refused` or :py:meth:`raise_for_refused` to find out if RT refused a part
     of the change.
 
-    A message of RT which is not in the catalog of the library is neither a success nor a refusal and never an error,
-    it is listed in :py:attr:`unrecognized`.
+    A message of RT which is not in the catalog of the library is neither a success nor a refusal, it is listed in
+    :py:attr:`unrecognized`. It is no error for the methods which can change something partly (e.g. ``edit_ticket()``);
+    the methods which change one thing and where the message is the only information about the result (e.g. ``take()``)
+    raise :py:exc:`~rt.exceptions.UnexpectedResponseError`, as the change may not have been made.
 
     .. note:: The messages of RT are recognized in English only. The language of the user of the API in RT must
               be set to English (``en``), else refused parts are not detected: :py:attr:`refused` is empty and all

@@ -148,9 +148,7 @@ async def test_group(async_rt_connection: AsyncRt):
     found = await _collect(async_rt_connection.search_groups(search_params=[{'field': 'Name', 'value': name}]))
     assert [(int(item['id']), item['Name'], item['Description']) for item in found] == [(group_id, name, 'first')]
 
-    messages = await async_rt_connection.edit_group(group_id, Description='second')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
+    assert (await async_rt_connection.edit_group(group_id, Description='second')).complete
     assert (await async_rt_connection.get_group(group_id))['Description'] == 'second'
 
     with pytest.raises(rt.exceptions.BadRequestError, match='already in use'):
@@ -183,7 +181,7 @@ async def test_group_members(async_rt_connection: AsyncRt):
     user_name, user_id = await _create_user(async_rt_connection)
     _, inner_user_id = await _create_user(async_rt_connection)
 
-    assert await async_rt_connection.add_group_member(group_id, user_id) == [f'Member added: {user_name}']
+    assert (await async_rt_connection.add_group_member(group_id, user_id)).complete
     await async_rt_connection.add_group_member(group_id, inner_group_id)
     await async_rt_connection.add_group_member(inner_group_id, inner_user_id)
 
@@ -249,7 +247,7 @@ async def test_user_groups(async_rt_connection: AsyncRt):
     other_group_id = await _create_group(async_rt_connection)
     user_name, _ = await _create_user(async_rt_connection)
 
-    assert await async_rt_connection.add_user_to_group(user_name, group_id) == [f'Member added: {user_name}']
+    assert (await async_rt_connection.add_user_to_group(user_name, group_id)).complete
     await async_rt_connection.add_user_to_group(user_name, other_group_id)
     assert {int(group['id']) async for group in async_rt_connection.get_user_groups(user_name)} == {group_id, other_group_id}
 
@@ -301,13 +299,14 @@ async def test_custom_field(async_rt_connection: AsyncRt):
     assert cf_id in [int(item['id']) async for item in async_rt_connection.search_custom_fields()]
     assert [int(item['id']) async for item in async_rt_connection.search_custom_fields(object_type='queue', object_id=queue_id)] == [cf_id]
 
-    messages = await async_rt_connection.edit_custom_field(cf_id, Description='edited')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
-    # RT reports invalid values only in the messages
-    messages = await async_rt_connection.edit_custom_field(cf_id, Type='Invalid')
-    assert len(messages) == 1
-    assert 'Illegal value' in messages[0]
+    assert (await async_rt_connection.edit_custom_field(cf_id, Description='edited')).complete
+    # RT reports invalid values only in its messages, the value is not changed
+    result = await async_rt_connection.edit_custom_field(cf_id, Type='Invalid')
+    assert result
+    assert not result.complete
+    with pytest.raises(rt.exceptions.InvalidUseError, match='Illegal value'):
+        result.raise_for_refused()
+    assert (await async_rt_connection.get_custom_field(cf_id))['Type'] == 'Select'
 
 
 async def test_custom_field_invalid(async_rt_connection: AsyncRt):
@@ -361,9 +360,7 @@ async def test_custom_field_values(async_rt_connection: AsyncRt):
     value = await async_rt_connection.get_custom_field_value(cf_id, low_id)
     assert (value['Name'], value['Description']) == ('Low', 'lowest')
 
-    messages = await async_rt_connection.edit_custom_field_value(cf_id, low_id, Description='changed')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
+    assert (await async_rt_connection.edit_custom_field_value(cf_id, low_id, Description='changed')).complete
     assert (await async_rt_connection.get_custom_field_value(cf_id, low_id))['Description'] == 'changed'
 
     await async_rt_connection.delete_custom_field_value(cf_id, low_id)
@@ -388,7 +385,7 @@ async def test_apply_custom_field(async_rt_connection: AsyncRt):
 
     assert await applied_to() == [queue_id]
 
-    assert await async_rt_connection.apply_custom_field(cf_id, other_queue_id) == [f'Added custom field {name} to {other_queue_name}.']
+    assert (await async_rt_connection.apply_custom_field(cf_id, other_queue_id)).complete
     assert await applied_to() == sorted([queue_id, other_queue_id])
     assert [int(item['id']) async for item in async_rt_connection.search_custom_fields(object_type='queue', object_id=other_queue_id)] == [cf_id]
 
@@ -577,9 +574,7 @@ async def test_catalog(async_rt_connection: AsyncRt):
     all_catalogs = {int(item['id']): item async for item in async_rt_connection.get_all_catalogs()}
     assert all_catalogs[catalog_id]['Name'] == name
 
-    messages = await async_rt_connection.edit_catalog(name, Description='edited')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
+    assert (await async_rt_connection.edit_catalog(name, Description='edited')).complete
     assert (await async_rt_connection.get_catalog(catalog_id))['Description'] == 'edited'
 
 
@@ -748,9 +743,7 @@ async def test_class(async_rt_connection: AsyncRt):
     assert class_id in [int(item['id']) async for item in async_rt_connection.search_classes()]
     assert class_id in [int(item['id']) async for item in async_rt_connection.get_all_classes()]
 
-    messages = await async_rt_connection.edit_class(class_id, Description='edited')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
+    assert (await async_rt_connection.edit_class(class_id, Description='edited')).complete
 
     with pytest.raises(rt.exceptions.BadRequestError):
         await async_rt_connection.create_class(name)
@@ -789,9 +782,7 @@ async def test_article(async_rt_connection: AsyncRt):
     assert [(int(item['id']), item['Name'], item['Summary'], int(item['Class']['id'])) for item in found] == [(article_id, name, 'summary', class_id)]
     assert article_id in [int(item['id']) async for item in async_rt_connection.search_articles()]
 
-    messages = await async_rt_connection.edit_article(article_id, Summary='changed', CustomFields={'Content': 'New text'})
-    assert len(messages) == 2
-    assert 'Summary' in messages[0]
+    assert (await async_rt_connection.edit_article(article_id, Summary='changed', CustomFields={'Content': 'New text'})).complete
     article = await async_rt_connection.get_article(article_id)
     assert [field['values'] for field in article['CustomFields'] if field['name'] == 'Content'] == [['New text']]
 
@@ -868,7 +859,7 @@ async def test_asset_links(async_rt_connection: AsyncRt):
     other_asset_id = await async_rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
     ticket_id = await async_rt_connection.create_ticket('General', subject='Asset links', content='Test')
 
-    assert await async_rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id) == [f'Asset {asset_id} refers to Ticket {ticket_id}.']
+    assert (await async_rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id)).complete
     await async_rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}')
     await async_rt_connection.edit_asset_link(asset_id, 'RefersTo', 'https://example.com/manual.pdf')
 
@@ -882,9 +873,9 @@ async def test_asset_links(async_rt_connection: AsyncRt):
     assert [(link['ref'], link['type'], int(link['id'])) for link in await async_rt_connection.get_links(ticket_id)] == [('referred-to-by', 'asset', asset_id)]
 
     # adding an existing link and deleting a missing one change nothing
-    assert await async_rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id) == ['Link already exists']
+    assert (await async_rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id)).complete
     await async_rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True)
-    assert await async_rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True) == ['Link not found']
+    assert (await async_rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True)).complete
     assert len(await async_rt_connection.get_asset_links(asset_id)) == 2
 
 

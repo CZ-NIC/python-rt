@@ -65,12 +65,53 @@ Searches and lists return a few fields of each object by default; other fields a
 ``fields=['Name', 'Description']``, or with a dictionary of query parameters as defined by RT, which also allows to
 return fields of linked objects, e.g. ``fields={'fields': 'Owner', 'fields[Owner]': 'Name,EmailAddress'}``.
 
-Methods changing something return the status messages of RT, e.g.
-``["Ticket 8: Subject changed from 'Test subject' to 'Re: Test subject'"]``. If RT refuses the change,
-an exception is raised instead, e.g. :py:exc:`~rt.exceptions.InvalidUseError` when taking a ticket which is
-already owned by the user. ``edit_ticket()`` and the other ``edit_*()`` methods are an exception: RT reports invalid
-values of single fields only in the returned messages (e.g.
-``"Ticket 8: Status 'x' isn't a valid status for this ticket."``), while the other fields are changed anyway.
+Results of changes
+------------------
+
+All methods which change something return an :py:class:`~rt.common.ActionResult`, which is **true whenever RT executed
+the request**, so ``if tracker.comment(...)`` keeps working like the ``bool`` returned in earlier versions.
+
+RT answers with HTTP status 200 and a list of status messages also if it refused all or a part of the request, and it
+gives no flag for success or failure. The library classifies the messages with a catalog of the messages of RT
+(``rt/_messages.py``, derived from the translation file of RT), and an exception is raised only for a refusal it knows:
+
+* Methods which change one thing (``take()``, ``untake()``, ``steal()``, ``merge_ticket()``, ``edit_link()``,
+  ``add_user_to_group()`` etc.) raise an exception if RT refuses, e.g. :py:exc:`~rt.exceptions.InvalidUseError` when
+  taking a ticket which is already owned by the user, as nothing was changed.
+* ``edit_ticket()`` and the other ``edit_*()`` methods, ``reply()`` and ``comment()`` can be applied partly: they
+  change everything RT accepts and report the values it refuses (e.g. an invalid status) only as a message. They do not
+  raise, as parts of the request were made. Code which cares can look at the details::
+
+    result = c.edit_ticket(1, Subject='New subject', Status='invalid')
+    if result:               # True: RT changed the subject
+        ...
+    result.complete          # False: RT refused the status
+    result.refused           # ("Ticket 1: Status 'invalid' isn't a valid status for this ticket.",)
+    result.unrecognized      # messages which are not in the catalog of the library (see below)
+    result.messages          # all messages of RT
+    result.raise_for_refused()  # raises InvalidUseError; NotFoundError if e.g. a user does not exist
+
+  ``raise_for_refused()`` raises :py:exc:`~rt.exceptions.NotFoundError` (e.g. a user or queue does not exist),
+  :py:exc:`~rt.exceptions.NotAllowedError` (permission denied) or :py:exc:`~rt.exceptions.InvalidUseError` (a refused
+  value), the most specific one if several parts were refused. ``reply()`` and ``comment()`` add the message before RT
+  sets their other values (``status``, ``custom_fields`` and ``custom_roles``), so a refused value never prevents the
+  message.
+
+A message which is not in the catalog (a new message of a newer RT, a message in another language, or a message which
+a value of a user makes ambiguous) is neither a success nor a refusal. It **never raises**, as the HTTP status does not
+tell if the request succeeded. It is listed in ``result.unrecognized``, which is empty in the normal case, so code
+which needs to be sure can check it.
+
+.. warning:: **The language of the user of the API must be set to English (``en``) in RT.**
+             RT answers with localized messages (language of the user, or of the server). The catalog contains the
+             English messages of RT only. In other languages nothing is recognized: ``refused`` is always empty,
+             ``complete`` is always true and the methods which change one thing do not raise for a refusal; all
+             messages are in ``unrecognized``. Set the language of the user in the preferences of RT
+             (*Preferences / Language*), or in the configuration of RT with ``Set($DefaultLanguage, 'en')`` if the
+             user has no language set.
+             RT also ignores some invalid input without any message: unknown fields and custom fields, and values it
+             can not interpret, e.g. an invalid date (reported as "Due changed from Not set to Not set") or a
+             non-numeric priority.
 
 All exceptions raised by the library are subclasses of :py:exc:`rt.exceptions.RtError`:
 

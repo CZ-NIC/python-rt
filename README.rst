@@ -118,6 +118,9 @@ another shell with::
     uv sync --group test
     uv run pytest tests
 
+This runs the tests of the async client. The tests of the sync client are generated from them (``uv run unasyncd``)
+and only run with ``uv run pytest -m sync tests``; use ``uv run pytest -m '' tests`` to run all tests.
+
 The user is ``root`` with the password ``password``. Use ``docker pull ghcr.io/python-rt/request-tracker:6.0``
 to update the image to the latest RT 6.0 release.
 

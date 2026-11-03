@@ -152,7 +152,7 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     assert ticket2_id > -1
 
     # edit link
-    assert await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id) == [f'Ticket {ticket_id} depends on Ticket {ticket2_id}.']
+    assert (await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id)).complete
 
     # get links
     links1 = await async_rt_connection.get_links(ticket_id)
@@ -170,9 +170,7 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     assert found
 
     # delete link
-    assert await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id, delete=True) == [
-        f'Ticket {ticket_id} no longer depends on Ticket {ticket2_id}.'
-    ]
+    assert (await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id, delete=True)).complete
     assert not [link for link in await async_rt_connection.get_links(ticket_id) if link['ref'] == 'depends-on']
 
     # link to a ticket which does not exist
@@ -188,15 +186,15 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     attachment_name = 'attachment-name.txt'
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
     attachment = Attachment(attachment_name, 'text/plain', attachment_content)
-    assert await async_rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment]) == ['Correspondence added']
+    assert (await async_rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment])).complete
 
     # reply with a comment
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert await async_rt_connection.comment(ticket_id, content=reply_text) == ['Comments added']
+    assert (await async_rt_connection.comment(ticket_id, content=reply_text)).complete
 
     # reply with a html content
     reply_text = '<em>Ut enim ad minim veniam</em>, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert await async_rt_connection.reply(ticket_id, content=reply_text, content_type='text/html') == ['Correspondence added']
+    assert (await async_rt_connection.reply(ticket_id, content=reply_text, content_type='text/html')).complete
 
     # attachments list
     at_list = [item async for item in async_rt_connection.get_attachments(ticket_id)]
@@ -210,11 +208,11 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
 
     # set invalid user
     with pytest.raises(rt.exceptions.NotFoundError):
-        await async_rt_connection.edit_ticket(ticket_id, Owner='invalid_user')
+        (await async_rt_connection.edit_ticket(ticket_id, Owner='invalid_user')).raise_for_refused()
 
     # set invalid queue
     with pytest.raises(rt.exceptions.NotFoundError):
-        await async_rt_connection.edit_ticket(ticket_id, Queue='invalid_queue')
+        (await async_rt_connection.edit_ticket(ticket_id, Queue='invalid_queue')).raise_for_refused()
 
     # edit invalid ticket
     with pytest.raises(rt.exceptions.NotFoundError):
@@ -225,7 +223,7 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
         await async_rt_connection.merge_ticket(ticket_id, ticket_id)
     with pytest.raises(rt.exceptions.NotFoundError):
         await async_rt_connection.merge_ticket(ticket2_id, 999999999)
-    assert await async_rt_connection.merge_ticket(ticket2_id, ticket_id) == ['Merge Successful']
+    assert (await async_rt_connection.merge_ticket(ticket2_id, ticket_id)).complete
 
     # delete ticket
     await async_rt_connection.delete_ticket(ticket_id)
@@ -494,8 +492,7 @@ async def test_assets(async_rt_connection: AsyncRt):
     asset_history = [item async for item in async_rt_connection.get_asset_history(asset_id)]
     assert len(asset_history) == 1
 
-    asset_edited = await async_rt_connection.edit_asset(asset_id, Name=asset_name_new)
-    assert asset_edited == [f"Asset {asset_id}: Name changed from '{asset_name}' to '{asset_name_new}'"]
+    assert (await async_rt_connection.edit_asset(asset_id, Name=asset_name_new)).complete
 
     search = async_rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}])
     items = [item async for item in search]

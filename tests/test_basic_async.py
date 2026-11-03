@@ -47,7 +47,7 @@ RT_QUEUE = 'General'
 
 
 async def test_get_user(async_rt_connection: AsyncRt):
-    user = await async_rt_connection.get_user(RT_USER)
+    user = await async_rt_connection.users.get(RT_USER)
     assert user['Name'] == RT_USER
     assert '@' in user['EmailAddress']
     assert user['Privileged'] == 1
@@ -63,41 +63,41 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     # empty search result
-    search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject)]
+    search_result = [item async for item in async_rt_connection.tickets.search(Subject=ticket_subject)]
     assert not search_result
 
     # create
-    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
+    ticket_id = await async_rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id > -1
 
     # search
-    search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject)]
+    search_result = [item async for item in async_rt_connection.tickets.search(Subject=ticket_subject)]
     assert len(search_result) == 1
     assert search_result[0]['id'] == str(ticket_id)
     assert search_result[0]['Status'] == 'new'
 
     # search with a list of fields
-    search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject, fields=['Status', 'Subject'])]
+    search_result = [item async for item in async_rt_connection.tickets.search(Subject=ticket_subject, fields=['Status', 'Subject'])]
     assert len(search_result) == 1
     assert search_result[0]['Subject'] == str(ticket_subject)
     assert search_result[0]['Status'] == 'new'
     assert 'Requestor' not in search_result[0].keys()
 
     # search with a dictionary of field parameters
-    search_result = [item async for item in async_rt_connection.search(Subject=ticket_subject, fields={'fields': 'Owner', 'fields[Owner]': 'Name'})]
+    search_result = [item async for item in async_rt_connection.tickets.search(Subject=ticket_subject, fields={'fields': 'Owner', 'fields[Owner]': 'Name'})]
     assert len(search_result) == 1
     assert 'Subject' not in search_result[0]
     assert 'Status' not in search_result[0]
     assert search_result[0]['Owner']['Name'] == 'Nobody'
 
     # raw search
-    search_result = [item async for item in async_rt_connection.search(raw_query=f'Subject="{ticket_subject}"')]
+    search_result = [item async for item in async_rt_connection.tickets.search(raw_query=f'Subject="{ticket_subject}"')]
     assert len(search_result) == 1
     assert search_result[0]['id'] == str(ticket_id)
     assert search_result[0]['Status'] == 'new'
 
     # get ticket
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     search_result[0]['id'] = int(search_result[0]['id'])
 
     for k in search_result[0]:
@@ -109,10 +109,10 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
 
     # edit ticket
     requestors = ['tester1@example.com', 'tester2@example.com']
-    await async_rt_connection.edit_ticket(ticket_id, Status='open', Requestor=requestors)
+    await async_rt_connection.tickets.edit(ticket_id, Status='open', Requestor=requestors)
 
     # get ticket (edited)
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     assert ticket['Status'] == 'open'
     for requestor in ticket['Requestor']:
         assert requestor['id'] in requestors
@@ -126,14 +126,14 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
         assert found
 
     # get history
-    hist = [item async for item in async_rt_connection.get_ticket_history(ticket_id)]
+    hist = [item async for item in async_rt_connection.tickets.history(ticket_id)]
     assert len(hist) > 0
-    transaction = await async_rt_connection.get_transaction(hist[0]['id'])
+    transaction = await async_rt_connection.tickets.get_transaction(hist[0]['id'])
     found = False
     for hyperlink in transaction['_hyperlinks']:
         if hyperlink['ref'] == 'attachment':
             attachment_id = hyperlink['_url'].rsplit('/', 1)[1]
-            attachment_text = base64.b64decode((await async_rt_connection.get_attachment(attachment_id))['Content']).decode('utf-8')
+            attachment_text = base64.b64decode((await async_rt_connection.tickets.get_attachment(attachment_id))['Content']).decode('utf-8')
             found = True
             assert attachment_text == ticket_text
             break
@@ -141,28 +141,28 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     assert found
 
     # get_short_history
-    short_hist = [item async for item in async_rt_connection.get_ticket_history(ticket_id)]
+    short_hist = [item async for item in async_rt_connection.tickets.history(ticket_id)]
     assert len(short_hist) > 0
     assert short_hist[0]['Type'] == 'Create'
     assert short_hist[0]['Creator']['Name'] == RT_USER
 
     # create 2nd ticket
     ticket2_subject = 'Testing issue ' + ''.join([random.choice(string.ascii_letters) for i in range(15)])
-    ticket2_id = await async_rt_connection.create_ticket(queue=RT_QUEUE, subject=ticket2_subject)
+    ticket2_id = await async_rt_connection.tickets.create(queue=RT_QUEUE, subject=ticket2_subject)
     assert ticket2_id > -1
 
     # edit link
-    assert (await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id)).complete
+    assert (await async_rt_connection.tickets.edit_link(ticket_id, 'DependsOn', ticket2_id)).complete
 
     # get links
-    links1 = await async_rt_connection.get_links(ticket_id)
+    links1 = await async_rt_connection.tickets.get_links(ticket_id)
     found = False
     for link in links1:
         if link['ref'] == 'depends-on' and link['id'] == str(ticket2_id):
             found = True
     assert found
 
-    links2 = await async_rt_connection.get_links(ticket2_id)
+    links2 = await async_rt_connection.tickets.get_links(ticket2_id)
     found = False
     for link in links2:
         if link['ref'] == 'depended-on-by' and link['id'] == str(ticket_id):
@@ -170,67 +170,67 @@ async def test_ticket_operations(async_rt_connection: AsyncRt):
     assert found
 
     # delete link
-    assert (await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id, delete=True)).complete
-    assert not [link for link in await async_rt_connection.get_links(ticket_id) if link['ref'] == 'depends-on']
+    assert (await async_rt_connection.tickets.edit_link(ticket_id, 'DependsOn', ticket2_id, delete=True)).complete
+    assert not [link for link in await async_rt_connection.tickets.get_links(ticket_id) if link['ref'] == 'depends-on']
 
     # link to a ticket which does not exist
     with pytest.raises(rt.exceptions.NotFoundError):
-        await async_rt_connection.edit_link(ticket_id, 'DependsOn', 999999999)
+        await async_rt_connection.tickets.edit_link(ticket_id, 'DependsOn', 999999999)
 
     # link which RT does not create
     with pytest.raises(rt.exceptions.InvalidUseError, match='itself'):
-        await async_rt_connection.edit_link(ticket_id, 'DependsOn', ticket_id)
+        await async_rt_connection.tickets.edit_link(ticket_id, 'DependsOn', ticket_id)
 
     # reply with attachment
     attachment_content = b'Content of attachment.'
     attachment_name = 'attachment-name.txt'
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
     attachment = Attachment(attachment_name, 'text/plain', attachment_content)
-    assert (await async_rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment])).complete
+    assert (await async_rt_connection.tickets.reply(ticket_id, content=reply_text, attachments=[attachment])).complete
 
     # reply with a comment
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert (await async_rt_connection.comment(ticket_id, content=reply_text)).complete
+    assert (await async_rt_connection.tickets.comment(ticket_id, content=reply_text)).complete
 
     # reply with a html content
     reply_text = '<em>Ut enim ad minim veniam</em>, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert (await async_rt_connection.reply(ticket_id, content=reply_text, content_type='text/html')).complete
+    assert (await async_rt_connection.tickets.reply(ticket_id, content=reply_text, content_type='text/html')).complete
 
     # attachments list
-    at_list = [item async for item in async_rt_connection.get_attachments(ticket_id)]
+    at_list = [item async for item in async_rt_connection.tickets.get_attachments(ticket_id)]
     assert at_list
     at_names = [at['Filename'] for at in at_list]
     assert attachment_name in at_names
     # get the attachment and compare it's content
     at_id = at_list[at_names.index(attachment_name)]['id']
-    at_content = base64.b64decode((await async_rt_connection.get_attachment(at_id))['Content'])
+    at_content = base64.b64decode((await async_rt_connection.tickets.get_attachment(at_id))['Content'])
     assert at_content == attachment_content
 
     # set invalid user
     with pytest.raises(rt.exceptions.NotFoundError):
-        (await async_rt_connection.edit_ticket(ticket_id, Owner='invalid_user')).raise_for_refused()
+        (await async_rt_connection.tickets.edit(ticket_id, Owner='invalid_user')).raise_for_refused()
 
     # set invalid queue
     with pytest.raises(rt.exceptions.NotFoundError):
-        (await async_rt_connection.edit_ticket(ticket_id, Queue='invalid_queue')).raise_for_refused()
+        (await async_rt_connection.tickets.edit(ticket_id, Queue='invalid_queue')).raise_for_refused()
 
     # edit invalid ticket
     with pytest.raises(rt.exceptions.NotFoundError):
-        await async_rt_connection.edit_ticket(999999999, Owner='Nobody')
+        await async_rt_connection.tickets.edit(999999999, Owner='Nobody')
 
     # merge tickets
     with pytest.raises(rt.exceptions.InvalidUseError, match='itself'):
-        await async_rt_connection.merge_ticket(ticket_id, ticket_id)
+        await async_rt_connection.tickets.merge(ticket_id, ticket_id)
     with pytest.raises(rt.exceptions.NotFoundError):
-        await async_rt_connection.merge_ticket(ticket2_id, 999999999)
-    assert (await async_rt_connection.merge_ticket(ticket2_id, ticket_id)).complete
+        await async_rt_connection.tickets.merge(ticket2_id, 999999999)
+    assert (await async_rt_connection.tickets.merge(ticket2_id, ticket_id)).complete
 
     # delete ticket
-    await async_rt_connection.delete_ticket(ticket_id)
+    await async_rt_connection.tickets.delete(ticket_id)
 
     # delete invalid ticket
     with pytest.raises(rt.exceptions.NotFoundError):
-        await async_rt_connection.delete_ticket(999999999)
+        await async_rt_connection.tickets.delete(999999999)
 
 
 async def test_attachments_create(async_rt_connection: AsyncRt):
@@ -246,15 +246,15 @@ async def test_attachments_create(async_rt_connection: AsyncRt):
         attachments.append(Attachment(attachment_name, 'text/plain', attachment_content))
 
     # create
-    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=attachments)
+    ticket_id = await async_rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=attachments)
     assert ticket_id > -1
 
     # get ticket
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     assert int(ticket['id']) == ticket_id
 
     # attachments list
-    at_list = [item async for item in async_rt_connection.get_attachments(ticket_id)]
+    at_list = [item async for item in async_rt_connection.tickets.get_attachments(ticket_id)]
     assert at_list
     assert len(at_list) == len(attachments)
     at_names = [at['Filename'] for at in at_list]
@@ -263,7 +263,7 @@ async def test_attachments_create(async_rt_connection: AsyncRt):
 
         # get the attachment and compare it's content
         at_id = at_list[at_names.index(k.file_name)]['id']
-        at_content = base64.b64decode((await async_rt_connection.get_attachment(at_id))['Content'])
+        at_content = base64.b64decode((await async_rt_connection.tickets.get_attachment(at_id))['Content'])
         assert at_content == k.file_content
 
 
@@ -276,9 +276,9 @@ async def test_attachments_search(async_rt_connection: AsyncRt):
     attachment_name = f'attachment-{random_string(length=10)}.txt'
     attachment = Attachment(attachment_name, 'text/plain', attachment_content)
 
-    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment])
+    ticket_id = await async_rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment])
 
-    at_list = [item async for item in async_rt_connection.get_attachments(ticket_id, fields=['TransactionId', 'Headers'])]
+    at_list = [item async for item in async_rt_connection.tickets.get_attachments(ticket_id, fields=['TransactionId', 'Headers'])]
     assert at_list
     assert len(at_list) == 1
 
@@ -292,7 +292,7 @@ async def test_attachments_comment(async_rt_connection: AsyncRt):
     ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     # create
-    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
+    ticket_id = await async_rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id > -1
 
     attachment_count = random.randint(2, 10)
@@ -304,11 +304,11 @@ async def test_attachments_comment(async_rt_connection: AsyncRt):
 
     # comment with attachments
     ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    comment_success = await async_rt_connection.comment(ticket_id=ticket_id, content=ticket_text, attachments=attachments)
+    comment_success = await async_rt_connection.tickets.comment(ticket_id=ticket_id, content=ticket_text, attachments=attachments)
     assert comment_success
 
     # attachments list
-    at_list = [item async for item in async_rt_connection.get_attachments(ticket_id)]
+    at_list = [item async for item in async_rt_connection.tickets.get_attachments(ticket_id)]
     assert at_list
     assert len(at_list) == len(attachments)
     at_names = [at['Filename'] for at in at_list]
@@ -317,7 +317,7 @@ async def test_attachments_comment(async_rt_connection: AsyncRt):
 
         # get the attachment and compare it's content
         at_id = at_list[at_names.index(k.file_name)]['id']
-        at_content = base64.b64decode((await async_rt_connection.get_attachment(at_id))['Content'])
+        at_content = base64.b64decode((await async_rt_connection.tickets.get_attachment(at_id))['Content'])
         assert at_content == k.file_content
 
 
@@ -327,7 +327,7 @@ async def test_attachments_reply(async_rt_connection: AsyncRt):
     ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
     # create
-    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
+    ticket_id = await async_rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id > -1
 
     attachment_count = random.randint(2, 10)
@@ -339,11 +339,11 @@ async def test_attachments_reply(async_rt_connection: AsyncRt):
 
     # comment with attachments
     ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
-    comment_success = await async_rt_connection.reply(ticket_id=ticket_id, content=ticket_text, attachments=attachments)
+    comment_success = await async_rt_connection.tickets.reply(ticket_id=ticket_id, content=ticket_text, attachments=attachments)
     assert comment_success
 
     # attachments list
-    at_list = [item async for item in async_rt_connection.get_attachments(ticket_id)]
+    at_list = [item async for item in async_rt_connection.tickets.get_attachments(ticket_id)]
     assert at_list
     assert len(at_list) == len(attachments)
     at_names = [at['Filename'] for at in at_list]
@@ -352,7 +352,7 @@ async def test_attachments_reply(async_rt_connection: AsyncRt):
 
         # get the attachment and compare it's content
         at_id = at_list[at_names.index(k.file_name)]['id']
-        at_content = base64.b64decode((await async_rt_connection.get_attachment(at_id))['Content'])
+        at_content = base64.b64decode((await async_rt_connection.tickets.get_attachment(at_id))['Content'])
         assert at_content == k.file_content
 
 
@@ -373,73 +373,73 @@ async def test_ticket_operations_admincc_cc(async_rt_connection: AsyncRt):
 
         return not diff
 
-    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
+    ticket_id = await async_rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id > -1
 
     # make sure Requestor, AdminCc and Cc are present and an empty list, as would be expected
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     assert len(ticket['Requestor']) >= 0
     assert len(ticket['AdminCc']) >= 0
     assert len(ticket['Cc']) >= 0
 
     # set requestors
     requestors = ['tester1@example.com', 'tester2@example.com']
-    await async_rt_connection.edit_ticket(ticket_id, Status='open', Requestor=requestors)
+    await async_rt_connection.tickets.edit(ticket_id, Status='open', Requestor=requestors)
     # verify
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     assert compare_list(requestors, ticket['Requestor'])
 
     # set admincc
     admincc = ['tester2@example.com', 'tester3@example.com']
-    await async_rt_connection.edit_ticket(ticket_id, Status='open', AdminCc=admincc)
+    await async_rt_connection.tickets.edit(ticket_id, Status='open', AdminCc=admincc)
     # verify
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     assert compare_list(requestors, ticket['Requestor'])
     assert compare_list(admincc, ticket['AdminCc'])
 
     # update admincc
     admincc = ['tester2@example.com', 'tester3@example.com', 'tester4@example.com']
-    await async_rt_connection.edit_ticket(ticket_id, Status='open', AdminCc=admincc)
+    await async_rt_connection.tickets.edit(ticket_id, Status='open', AdminCc=admincc)
     # verify
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     assert compare_list(requestors, ticket['Requestor'])
     assert compare_list(admincc, ticket['AdminCc'])
 
     # unset requestors and admincc
     requestors = []
     admincc = []
-    await async_rt_connection.edit_ticket(ticket_id, Status='open', Requestor=requestors, AdminCc=admincc)
+    await async_rt_connection.tickets.edit(ticket_id, Status='open', Requestor=requestors, AdminCc=admincc)
     # verify
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     assert compare_list(requestors, ticket['Requestor'])
     assert compare_list(admincc, ticket['AdminCc'])
 
 
 async def test_users(async_rt_connection: AsyncRt):
-    assert await async_rt_connection.get_user('tester1@example.com') is not None
-    assert await async_rt_connection.user_exists('root', privileged=True) is True
-    assert await async_rt_connection.user_exists('tester1@example.com', privileged=False) is True
-    assert await async_rt_connection.user_exists('tester1@example.com', privileged=True) is False
-    assert await async_rt_connection.user_exists('does-not-exist@example.com', privileged=False) is False
+    assert await async_rt_connection.users.get('tester1@example.com') is not None
+    assert await async_rt_connection.users.exists('root', privileged=True) is True
+    assert await async_rt_connection.users.exists('tester1@example.com', privileged=False) is True
+    assert await async_rt_connection.users.exists('tester1@example.com', privileged=True) is False
+    assert await async_rt_connection.users.exists('does-not-exist@example.com', privileged=False) is False
 
     random_user_name = f'username_{random_string()}'
     random_user_email = f'user-{random_string()}@example.com'
     random_user_password = f'user_password-{random_string()}'
 
-    assert await async_rt_connection.create_user(random_user_name, random_user_email, Password=random_user_password) == random_user_name
-    await async_rt_connection.delete_user(random_user_name)
+    assert await async_rt_connection.users.create(random_user_name, random_user_email, Password=random_user_password) == random_user_name
+    await async_rt_connection.users.delete(random_user_name)
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        await async_rt_connection.delete_user(f'username_{random_string()}')
+        await async_rt_connection.users.delete(f'username_{random_string()}')
 
-    assert await async_rt_connection.edit_user(user_id=random_user_name, RealName=random_user_name)
+    assert await async_rt_connection.users.edit(user_id=random_user_name, RealName=random_user_name)
 
 
 async def test_queues(async_rt_connection: AsyncRt):
-    queue = await async_rt_connection.get_queue(RT_QUEUE)
+    queue = await async_rt_connection.queues.get(RT_QUEUE)
     assert queue['Name'] == RT_QUEUE
 
-    queues = [item async for item in async_rt_connection.get_all_queues()]
+    queues = [item async for item in async_rt_connection.queues.all()]
     assert len(queues) >= 1
 
     found = False
@@ -451,31 +451,31 @@ async def test_queues(async_rt_connection: AsyncRt):
     random_queue_name = f'Queue {random_string()}'
     random_queue_email = f'q-{random_string()}@example.com'
 
-    await async_rt_connection.create_queue(random_queue_name, CorrespondAddress=random_queue_email, Description='test queue')
-    queues = [item async for item in async_rt_connection.get_all_queues()]
+    await async_rt_connection.queues.create(random_queue_name, CorrespondAddress=random_queue_email, Description='test queue')
+    queues = [item async for item in async_rt_connection.queues.all()]
     found = False
     for q in queues:
         if q['Name'] == random_queue_name:
             found = True
     assert found
 
-    await async_rt_connection.edit_queue(random_queue_name, Disabled='1')
-    assert (await async_rt_connection.get_queue(random_queue_name))['Disabled'] == '1'
+    await async_rt_connection.queues.edit(random_queue_name, Disabled='1')
+    assert (await async_rt_connection.queues.get(random_queue_name))['Disabled'] == '1'
 
-    await async_rt_connection.edit_queue(random_queue_name, Disabled='0')
-    assert (await async_rt_connection.get_queue(random_queue_name))['Disabled'] == '0'
-
-    with pytest.raises(rt.exceptions.NotFoundError):
-        await async_rt_connection.get_queue('InvalidName')
-
-    await async_rt_connection.delete_queue(random_queue_name)
+    await async_rt_connection.queues.edit(random_queue_name, Disabled='0')
+    assert (await async_rt_connection.queues.get(random_queue_name))['Disabled'] == '0'
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        await async_rt_connection.delete_queue(f'Queue {random_string()}')
+        await async_rt_connection.queues.get('InvalidName')
+
+    await async_rt_connection.queues.delete(random_queue_name)
+
+    with pytest.raises(rt.exceptions.NotFoundError):
+        await async_rt_connection.queues.delete(f'Queue {random_string()}')
 
 
 async def test_catalog(async_rt_connection: AsyncRt):
-    catalog = await async_rt_connection.get_catalog(1)
+    catalog = await async_rt_connection.catalogs.get(1)
     assert catalog['id'] == 1
 
 
@@ -483,39 +483,39 @@ async def test_assets(async_rt_connection: AsyncRt):
     asset_name = random_string()
     asset_name_new = random_string()
 
-    asset_id = await async_rt_connection.create_asset(asset_name, 1, Creator='root')
+    asset_id = await async_rt_connection.assets.create(asset_name, 1, Creator='root')
     assert asset_id
 
-    asset = await async_rt_connection.get_asset(asset_id)
+    asset = await async_rt_connection.assets.get(asset_id)
     assert asset['id'] == asset_id
 
-    asset_history = [item async for item in async_rt_connection.get_asset_history(asset_id)]
+    asset_history = [item async for item in async_rt_connection.assets.history(asset_id)]
     assert len(asset_history) == 1
 
-    assert (await async_rt_connection.edit_asset(asset_id, Name=asset_name_new)).complete
+    assert (await async_rt_connection.assets.edit(asset_id, Name=asset_name_new)).complete
 
-    search = async_rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}])
+    search = async_rt_connection.assets.search(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}])
     items = [item async for item in search]
     assert len(items) == 1
     assert items[0]['Status'] == 'new'
 
-    search = async_rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields='Owner')
+    search = async_rt_connection.assets.search(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields='Owner')
     items = [item async for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['id'] == 'Nobody'
     assert 'Status' not in items[0]
 
-    search = async_rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields=['Owner'])
+    search = async_rt_connection.assets.search(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields=['Owner'])
     items = [item async for item in search]
     assert len(items) == 1
     assert items[0]['Owner']['id'] == 'Nobody'
     assert 'Status' not in items[0]
 
-    search = async_rt_connection.search_assets()
+    search = async_rt_connection.assets.search()
     items = [item async for item in search]
     assert items
 
-    search = async_rt_connection.search_assets(
+    search = async_rt_connection.assets.search(
         catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}], fields={'fields': 'Owner', 'fields[Owner]': 'Name'}
     )
     items = [item async for item in search]

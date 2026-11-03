@@ -42,6 +42,8 @@ nitpick_ignore_regex = [
     (r'py:class', r'httpx2\..*'),
     # type alias of rt.common for JSON data sent to RT, not documented as class
     (r'py:class', r'JSONInput'),
+    # the private transport is passed to the classes of the areas by the client, users do not create them
+    (r'py:class', r'rt\._rest2(?:_async)?\.transport\._(?:Async)?Transport'),
 ]
 
 autodoc_default_options = {

@@ -39,7 +39,7 @@ Python implementation of REST API described here:
       import httpx2
 
       async with rt.rest2_async.AsyncRt(url='http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password')) as tracker:
-          ticket = await tracker.get_ticket(1)
+          ticket = await tracker.tickets.get(1)
 
 ⚠️ **Warning**:
     The next release contains breaking changes for both the REST API version 1 and version 2 parts. Please see the
@@ -73,15 +73,16 @@ An example is worth a thousand words::
     >>> import rt.rest2
     >>> import httpx2
     >>> tracker = rt.rest2.Rt(url='http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password'))
-    >>> [ticket['id'] for ticket in tracker.search(queue='helpdesk', Status='open')]
+    >>> [ticket['id'] for ticket in tracker.tickets.search(queue='helpdesk', Status='open')]
     ['1', '2', '10', '15']
-    >>> tracker.create_ticket(queue='helpdesk', \
+    >>> tracker.tickets.create(queue='helpdesk', \
     ... subject='Coffee (important)', content='Help I Ran Out of Coffee!')
     19
-    >>> tracker.edit_ticket(19, Requestor='addicted@example.com')
-    ['Added addicted@example.com as Requestor for this ticket']
-    >>> tracker.reply(19, content='Do you know Starbucks?')
-    ['Correspondence added']
+    >>> result = tracker.tickets.edit(19, Requestor='addicted@example.com')
+    >>> result.complete
+    True
+    >>> bool(tracker.tickets.reply(19, content='Do you know Starbucks?'))
+    True
 
 Print the last reply or comment of the tickets of a queue which have been updated recently::
 
@@ -90,8 +91,8 @@ Print the last reply or comment of the tickets of a queue which have been update
     >>> import httpx2
     >>> tracker = rt.rest2.Rt(url='http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password'))
     >>> fifteen_minutes_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
-    >>> for ticket in tracker.last_updated(fifteen_minutes_ago, queue='helpdesk'):
-    ...     messages = list(tracker.get_ticket_messages(ticket['id']))
+    >>> for ticket in tracker.tickets.last_updated(fifteen_minutes_ago, queue='helpdesk'):
+    ...     messages = list(tracker.tickets.messages(ticket['id']))
     ...     print(ticket['id'], messages[-1]['Creator']['Name'], messages[-1]['Content'])
 
 See the documentation for more examples.
@@ -118,8 +119,13 @@ another shell with::
     uv sync --group test
     uv run pytest tests
 
-This runs the tests of the async client. The tests of the sync client are generated from them (``uv run unasyncd``)
-and only run with ``uv run pytest -m sync tests``; use ``uv run pytest -m '' tests`` to run all tests.
+This runs the tests of the async client in 4 parallel processes (about a minute; ``-n 0`` runs them one after the other,
+e.g. to debug them, ``-n 8`` is a bit faster). The tests of the sync client are generated from them (``uv run unasyncd``)
+and only run with ``uv run pytest -m sync tests``; use ``uv run pytest -m '' tests`` to run all tests. Tests which do not
+need RT (mocked responses, unit tests) run in a few seconds with ``uv run pytest -m 'not live' tests``.
+
+The tests create objects, so use a new container for each run: once RT holds more than 100 objects of a kind (e.g. catalogs),
+it does not return all of them in the listings and the tests of the listings fail.
 
 The user is ``root`` with the password ``password``. Use ``docker pull ghcr.io/python-rt/request-tracker:6.0``
 to update the image to the latest RT 6.0 release.

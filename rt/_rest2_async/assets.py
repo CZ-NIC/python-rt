@@ -1,0 +1,384 @@
+"""Assets and catalogs of assets of the REST2 client."""
+
+import collections.abc
+import typing
+
+from rt._rest2_async.transport import _AsyncTransport
+from rt.common import (
+    _HISTORY_FIELDS,
+    _LINK_REFS,
+    ActionResult,
+    JSONInput,
+    JSONSearchParams,
+    TicketLinkName,
+    _fields_params,
+    _path,
+    _raise_for_messages,
+)
+from rt.exceptions import (
+    InvalidUseError,
+)
+
+
+class AsyncAssets:
+    """Assets of RT.
+
+    Use it as attribute of :py:class:`AsyncRt`, e.g. ``tracker.assets``.
+    """
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self, asset_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
+        """Get asset.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param asset_id: Asset ID.
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Catalog]': 'Name'}``. RT always returns all fields of the asset itself.
+        :returns: Asset as dictionary, with these keys:
+
+                      * id
+                      * Name
+                      * Description
+                      * Catalog
+                      * Status
+                      * Owner
+                      * Lifecycle
+                      * Disabled
+                      * Contact
+                      * HeldBy
+                      * CustomFields
+                      * Created
+                      * Creator
+                      * LastUpdated
+                      * LastUpdatedBy
+                      * _hyperlinks
+
+        :raises NotFoundError: If the asset does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._t.dict_result(await self._t.send('GET', _path('asset', asset_id), params=fields or {}))
+
+    async def create(self, name: str, catalog: str | int, **kwargs: JSONInput) -> int:
+        """Create a new asset in a catalog.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param name: Asset name.
+        :param catalog: Catalog name or ID.
+        :param kwargs: Other fields to set, e.g. Description, Status, CustomFields, RefersTo.
+        :returns: ID of the new asset.
+        :raises BadRequestError: If RT rejects the request as invalid.
+        :raises NotAllowedError: If the user is not allowed to create assets in the catalog,
+                                 or the catalog does not exist (RT returns status code 403 for both).
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = await self._t.send('POST', 'asset', json_data={'Name': name, 'Catalog': catalog, **kwargs})
+
+        return int(self._t.created_id(self._t.dict_result(response)))
+
+    async def edit(self, asset_id: str | int, **kwargs: JSONInput) -> ActionResult:
+        """Edit an existing asset.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param asset_id: Asset ID.
+        :param kwargs: Fields to set, e.g. Name, Description, Status, CustomFields, RefersTo.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
+        :raises NotFoundError: If the asset does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._t.result(self._t.list_result(await self._t.send('PUT', _path('asset', asset_id), json_data=kwargs)))
+
+    async def delete(self, asset_id: str | int) -> None:
+        """Mark an asset as deleted by setting its status to ``deleted``.
+
+        Assets can not be deleted in RT, so the endpoint ``DELETE /asset/:id`` of REST2 always fails
+        (with HTTP status 500), while setting the status works as intended by RT.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param asset_id: Asset ID.
+        :raises NotFoundError: If the asset does not exist.
+        :raises NotAllowedError: If the user is not allowed to change the asset.
+        :raises InvalidUseError: If RT refused to change the status, e.g. if the lifecycle of the catalog does not
+                                 allow it.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        msg = self._t.list_result(await self._t.send('PUT', _path('asset', asset_id), json_data={'Status': 'deleted'}))
+
+        # RT returns no message if the asset is already deleted
+        _raise_for_messages(msg)
+
+    async def history(self, asset_id: str | int) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Get asset history.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param asset_id: Asset ID.
+        :returns: Iterator of transactions, each a dictionary with the same keys as for
+                  :py:meth:`~AsyncTickets.history`. Empty if the asset does not exist.
+        """
+        async for transaction in self._t.paged_request(
+            _path('asset', asset_id, 'history'),
+            params={
+                'fields': _HISTORY_FIELDS,
+                'fields[Creator]': 'id,Name,RealName,EmailAddress',
+            },
+        ):
+            yield transaction
+
+    async def search(
+        self,
+        *,
+        catalog_id: str | int | None = None,
+        search_params: collections.abc.Sequence[collections.abc.Mapping[str, JSONInput]] | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        raw_query: str | None = None,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search assets in a catalog, with conditions or an AssetSQL query.
+
+        Example::
+
+            >>> client = AsyncRt(...)
+            >>> params = [{"field": "Name", "value": "NameOfMyAsset"}]
+            >>> client.assets.search(catalog_id=1, search_params=params, fields="Owner,Status")
+            >>> client.assets.search(catalog_id=1, search_params=params, fields=["Owner", "Status"])
+            >>> client.assets.search(catalog_id=1, search_params=params, fields={"fields": "Owner,Status", "fields[Owner]": "id,Name"})
+            >>> client.assets.search(raw_query="Catalog = 'General assets' AND 'CF.{Asset Type}' LIKE 'Computer'")
+
+        The following is returned for each asset by default (when `fields` is `None`)::
+
+            {
+                'Description': '',
+                'id': '1',
+                '_url': 'http://localhost:8080/REST/2.0/asset/1',
+                'Owner': {'_url': 'http://localhost:8080/REST/2.0/user/Nobody', 'id': 'Nobody', 'type': 'user'},
+                'Status': 'new',
+                'type': 'asset'
+            }
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param catalog_id: Catalog ID. Use `None` to search all catalogs.
+        :param search_params: Params used to filter the results. Each param is a dictionary with the keys:
+
+            - field: str
+            - value: str | int
+            - operator: Literal[">", "<", "=", "!=", "LIKE", "NOT LIKE", ">=", "<="] | None
+
+        :param fields: Fields returned for each asset: a comma separated string or list of fields,
+                       or a dictionary with query parameters as defined by RT.
+        :param raw_query: AssetSQL query, used instead of *catalog_id* and *search_params* (requires RT 5.0.2).
+                          It is passed to RT as is, so never include untrusted input in it. RT ignores an invalid
+                          query and then returns all assets (RT 6.0.4).
+        :returns: Iterator of the found assets.
+        :raises InvalidUseError: If *raw_query* is empty or combined with *catalog_id* or *search_params*.
+        """
+        get_params = _fields_params(fields, default_fields='Owner,Description,Status')
+
+        if raw_query is not None:
+            if catalog_id is not None or search_params is not None:
+                raise InvalidUseError('raw_query can not be combined with catalog_id or search_params.')
+            if not raw_query.strip():
+                # RT would return all assets for an empty query
+                raise InvalidUseError('raw_query must not be empty.')
+
+            # sent in the body like the TicketSQL query of search()
+            async for item in self._t.paged_request('assets', params=get_params, form_data={'query': raw_query}):
+                yield item
+            return
+
+        # copy the search parameters, so the list passed by the caller is not modified
+        search_params = list(search_params or [])
+        if catalog_id is not None:
+            # combined with AND also with conditions on Catalog, which RT would combine with OR by default
+            search_params.append({'field': 'Catalog', 'value': catalog_id, 'operator': '=', 'entry_aggregator': 'AND'})
+        elif not search_params:
+            # RT returns no asset for a search without a condition
+            search_params = [{'field': 'id', 'operator': '>', 'value': 0}]
+
+        async for item in self._t.paged_request('assets', json_data=search_params, params=get_params):
+            yield item
+
+    async def get_links(self, asset_id: str | int) -> list[dict[str, typing.Any]]:
+        """Get the links of an asset, e.g. to tickets, other assets or URLs.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param asset_id: Asset ID.
+        :returns: The links of the asset, with the same keys as for :py:meth:`~AsyncTickets.get_links`.
+        :raises NotFoundError: If the asset does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        asset = await self.get(asset_id)
+
+        return [link for link in asset['_hyperlinks'] if link.get('ref') in _LINK_REFS]
+
+    async def edit_link(
+        self,
+        asset_id: str | int,
+        link_name: TicketLinkName,
+        link_value: str | int,
+        *,
+        delete: bool = False,
+    ) -> ActionResult:
+        """Add or delete a single link of an asset, keeping its other links.
+
+        Example::
+
+            >>> tracker.assets.tickets.edit_link(3, 'RefersTo', 1)  # ticket 1
+            >>> tracker.assets.tickets.edit_link(3, 'Parent', 'asset:5')
+            >>> tracker.assets.tickets.edit_link(3, 'RefersTo', 'https://example.com/manual.pdf')
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 ignores the request, so
+                  :py:exc:`~rt.exceptions.UnexpectedResponseError` is raised.
+
+        :param asset_id: Asset ID.
+        :param link_name: Name of link to edit ('Parent', 'Child', 'RefersTo', 'ReferredToBy', 'DependsOn',
+                          'DependedOnBy').
+        :param link_value: The linked object: the ID of a ticket, an asset as ``'asset:5'``, or a URL.
+        :param delete: Set to True to delete the link instead of creating it.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
+        :raises NotFoundError: If the asset or the linked object does not exist.
+        :raises InvalidUseError: If the link name is not supported or RT does not allow the link, e.g. from an
+                                 asset to itself.
+        :raises NotAllowedError: If the user is not allowed to change the asset.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, or RT answers with a message which is not
+                                         known to the library (e.g. if the language of the user is not English): the action may not have been made.
+        """
+        return await self._t.edit_link('asset', asset_id, link_name, link_value, delete=delete)
+
+
+class AsyncCatalogs:
+    """Catalogs of assets of RT.
+
+    Use it as attribute of :py:class:`AsyncRt`, e.g. ``tracker.catalogs``.
+    """
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self, catalog_id: str | int) -> dict[str, typing.Any]:
+        """Get catalog.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param catalog_id: Identification of catalog by name (str) or ID (int).
+        :returns: Catalog as dictionary with these keys:
+
+                      * id
+                      * Name
+                      * Description
+                      * Lifecycle
+                      * Disabled
+                      * Contact
+                      * HeldBy
+                      * Created
+                      * Creator
+                      * LastUpdated
+                      * LastUpdatedBy
+                      * _hyperlinks
+
+        :raises NotFoundError: If the catalog does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._t.dict_result(await self._t.send('GET', _path('catalog', catalog_id)))
+
+    async def all(self, *, include_disabled: bool = False) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Get all catalogs which the user can see.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param include_disabled: Set to True to also return disabled catalogs.
+        :returns: Iterator of the catalogs, each a dictionary with the keys id, type, _url, Name, Description,
+                  Lifecycle and Disabled.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        params: dict[str, str | int] = {'fields': 'Name,Description,Lifecycle,Disabled', 'find_disabled_rows': int(include_disabled)}
+
+        async for item in self._t.paged_request('catalogs/all', params=params):
+            yield item
+
+    async def create(self, name: str, **kwargs: JSONInput) -> int:
+        """Create a catalog.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param name: Name of the catalog, which must be unique.
+        :param kwargs: Other fields to set, e.g. Description or Lifecycle (an asset lifecycle, ``'assets'`` by default).
+        :returns: ID of the new catalog.
+        :raises BadRequestError: If RT rejects the request, e.g. if a catalog with the name exists or the lifecycle
+                                 is invalid.
+        :raises NotAllowedError: If the user is not allowed to create catalogs.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = await self._t.send('POST', 'catalog', json_data={'Name': name, **kwargs})
+
+        return int(self._t.created_id(self._t.dict_result(response)))
+
+    async def edit(self, catalog_id: str | int, **kwargs: JSONInput) -> ActionResult:
+        """Edit a catalog.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param catalog_id: Identification of the catalog by name (str) or ID (int).
+        :param kwargs: Fields to set, e.g. Name, Description, Lifecycle, Disabled. RT ignores unknown fields.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
+        :raises NotFoundError: If the catalog does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return self._t.result(self._t.list_result(await self._t.send('PUT', _path('catalog', catalog_id), json_data=kwargs)))
+
+    async def delete(self, catalog_id: str | int) -> None:
+        """Disable a catalog.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param catalog_id: Identification of the catalog by name (str) or ID (int).
+        :raises NotFoundError: If the catalog does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        await self._t.delete(_path('catalog', catalog_id))
+
+    async def search(
+        self,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        include_disabled: bool = False,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Search catalogs.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param search_params: Conditions of the search as described for :py:meth:`~AsyncAssets.search`, e.g.
+                              ``[{'field': 'Name', 'operator': 'LIKE', 'value': 'Laptops'}]``. All catalogs if not
+                              specified.
+        :param fields: Fields returned for each catalog: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT. By default Name, Description, Lifecycle and Disabled.
+        :param include_disabled: Set to True to also return disabled catalogs.
+        :returns: Iterator of the found catalogs.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        search_params = list(search_params or [])
+        if not search_params:
+            # RT returns no catalog for a search without a condition
+            search_params = [{'field': 'id', 'operator': '>', 'value': 0}]
+
+        params: dict[str, str | int] = {
+            **_fields_params(fields, default_fields='Name,Description,Lifecycle,Disabled'),
+            'find_disabled_rows': int(include_disabled),
+        }
+
+        async for item in self._t.paged_request('catalogs', json_data=search_params, params=params):
+            yield item

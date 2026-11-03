@@ -74,6 +74,13 @@ QueryParams: typing.TypeAlias = collections.abc.Mapping[str, str | int]
 # Conditions of a JSON search of REST2, e.g. ``[{'field': 'Name', 'operator': 'LIKE', 'value': 'Support'}]``.
 JSONSearchParams: typing.TypeAlias = collections.abc.Sequence[collections.abc.Mapping[str, JSONInput]]
 
+# Fields of the transactions returned by the history methods. RT returns the field Description always empty in
+# collections, as it is no attribute of transactions; Field, OldValue, NewValue and Data describe a change.
+_HISTORY_FIELDS = 'Type,Field,OldValue,NewValue,Data,TimeTaken,Creator,Created,_hyperlinks'
+
+# Names (ref) of the links between tickets in the hyperlinks of a ticket.
+_LINK_REFS = frozenset({'depends-on', 'depended-on-by', 'parent', 'child', 'refers-to', 'referred-to-by'})
+
 # Fields which can be set when creating or editing a user.
 _USER_FIELDS = frozenset(
     {
@@ -330,14 +337,14 @@ class ActionResult:
 
     RT answers a change with HTTP status 200 and status messages, also if it refused all or a part of it. RT changes
     all fields it accepts and reports the ones it refuses (e.g. an invalid status) only as message. The result is
-    always true, i.e. ``if tracker.comment(...)`` means that the request was executed by RT, like the ``bool`` returned
+    always true, i.e. ``if tracker.tickets.comment(...)`` means that the request was executed by RT, like the ``bool`` returned
     in earlier versions. Methods which change one thing (e.g. ``take()``) raise an exception if RT refuses the change,
-    as nothing was changed; the other methods (e.g. ``edit_ticket()``, ``reply()``) do not, as parts of the change were
+    as nothing was changed; the other methods (e.g. ``tickets.edit()``, ``reply()``) do not, as parts of the change were
     made. Use :py:attr:`complete`, :py:attr:`refused` or :py:meth:`raise_for_refused` to find out if RT refused a part
     of the change.
 
     A message of RT which is not in the catalog of the library is neither a success nor a refusal, it is listed in
-    :py:attr:`unrecognized`. It is no error for the methods which can change something partly (e.g. ``edit_ticket()``);
+    :py:attr:`unrecognized`. It is no error for the methods which can change something partly (e.g. ``tickets.edit()``);
     the methods which change one thing and where the message is the only information about the result (e.g. ``take()``)
     raise :py:exc:`~rt.exceptions.UnexpectedResponseError`, as the change may not have been made.
 
@@ -349,7 +356,7 @@ class ActionResult:
 
     Example::
 
-        >>> result = tracker.edit_ticket(1, Subject='New', Status='invalid')
+        >>> result = tracker.tickets.edit(1, Subject='New', Status='invalid')
         >>> bool(result)  # RT changed the subject
         True
         >>> result.complete

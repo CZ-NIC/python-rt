@@ -54,13 +54,13 @@ def test_ticket_attachments(rt_connection: Rt):
     attachment_name = 'attachment-name.txt'
 
     attachment = Attachment(attachment_name, 'text/plain', attachment_content)
-    ticket_id = rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment])
+    ticket_id = rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment])
     assert ticket_id
 
-    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id)]
+    att_ids = [item for item in rt_connection.tickets.get_attachments_ids(ticket_id)]
     assert len(att_ids) == 1
 
-    att_list = [item for item in rt_connection.get_attachments(ticket_id)]
+    att_list = [item for item in rt_connection.tickets.get_attachments(ticket_id)]
     assert len(att_list) == 1
 
     att_names = [att['Filename'] for att in att_list]
@@ -68,20 +68,20 @@ def test_ticket_attachments(rt_connection: Rt):
 
     # get the attachment and compare it's content
     att_id = att_list[att_names.index(attachment_name)]['id']
-    att_content = base64.b64decode((rt_connection.get_attachment(att_id))['Content'])
+    att_content = base64.b64decode((rt_connection.tickets.get_attachment(att_id))['Content'])
     assert att_content == attachment_content
 
     # test filter parameters
-    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id)]
+    att_ids = [item for item in rt_connection.tickets.get_attachments_ids(ticket_id)]
     assert len(att_ids) == 1
 
     # all parts of the message, not only the file
-    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, files_only=False)]
+    att_ids = [item for item in rt_connection.tickets.get_attachments_ids(ticket_id, files_only=False)]
     assert len(att_ids) == 3
 
-    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': 'non-existant.txt'}])]
+    att_ids = [item for item in rt_connection.tickets.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': 'non-existant.txt'}])]
     assert not att_ids
-    att_ids = [item for item in rt_connection.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': attachment_name}])]
+    att_ids = [item for item in rt_connection.tickets.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': attachment_name}])]
     assert len(att_ids) == 1
 
 
@@ -90,18 +90,18 @@ def test_ticket_take(rt_connection: Rt):
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
-    ticket_id = rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
+    ticket_id = rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id
 
-    assert (rt_connection.take(ticket_id)).complete
+    assert (rt_connection.tickets.take(ticket_id)).complete
     with pytest.raises(rt.exceptions.InvalidUseError, match='already owns'):
-        rt_connection.take(ticket_id)
+        rt_connection.tickets.take(ticket_id)
 
-    assert (rt_connection.untake(ticket_id)).complete
+    assert (rt_connection.tickets.untake(ticket_id)).complete
 
     # RT only steals tickets owned by another user, the ticket is owned by Nobody now
     with pytest.raises(rt.exceptions.InvalidUseError, match='someone else'):
-        rt_connection.steal(ticket_id)
+        rt_connection.tickets.steal(ticket_id)
 
 
 # --- fields of replies and comments ----------------------------------------------------------------------------------
@@ -109,43 +109,43 @@ def test_ticket_take(rt_connection: Rt):
 
 def test_reply_and_comment_fields(rt_connection: Rt):
     queue_name = f'queue-{random_string()}'
-    queue_id = rt_connection.create_queue(queue_name)
+    queue_id = rt_connection.queues.create(queue_name)
     txn_field = f'cf-{random_string()}'
-    txn_field_id = rt_connection.create_custom_field(txn_field, 'Freeform', 'RT::Queue-RT::Ticket-RT::Transaction', MaxValues=1)
-    rt_connection.apply_custom_field(txn_field_id, queue_id)
-    ticket_id = rt_connection.create_ticket(queue_name, subject='Fields of replies', content='Test')
+    txn_field_id = rt_connection.custom_fields.create(txn_field, 'Freeform', 'RT::Queue-RT::Ticket-RT::Transaction', MaxValues=1)
+    rt_connection.custom_fields.apply(txn_field_id, queue_id)
+    ticket_id = rt_connection.tickets.create(queue_name, subject='Fields of replies', content='Test')
 
-    assert (rt_connection.reply(ticket_id, 'Reply', subject='Other subject', time_taken=5, status='stalled')).complete
-    assert (rt_connection.comment(ticket_id, 'Comment', time_taken=3, txn_custom_fields={txn_field: 'value'})).complete
+    assert (rt_connection.tickets.reply(ticket_id, 'Reply', subject='Other subject', time_taken=5, status='stalled')).complete
+    assert (rt_connection.tickets.comment(ticket_id, 'Comment', time_taken=3, txn_custom_fields={txn_field: 'value'})).complete
 
-    ticket = rt_connection.get_ticket(ticket_id)
+    ticket = rt_connection.tickets.get(ticket_id)
     assert ticket['Status'] == 'stalled'
     assert ticket['TimeWorked'] == '8'
-    history = [item for item in rt_connection.get_ticket_history(ticket_id)]
+    history = [item for item in rt_connection.tickets.history(ticket_id)]
     assert [item['Type'] for item in history].count('Correspond') == 1
 
 
 def test_reply_invalid_status(rt_connection: Rt):
-    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Invalid status', content='Test')
+    ticket_id = rt_connection.tickets.create(RT_QUEUE, subject='Invalid status', content='Test')
 
     # RT adds the reply and reports the refused status only in a message; the result is true as the reply was added
-    result = rt_connection.reply(ticket_id, 'Reply', status='invalid')
+    result = rt_connection.tickets.reply(ticket_id, 'Reply', status='invalid')
     assert result
     assert not result.complete
     assert "Status 'invalid' isn't a valid status for this ticket." in result.refused
     assert result.messages[0] == 'Correspondence added'
 
-    assert (rt_connection.get_ticket(ticket_id))['Status'] != 'invalid'
-    assert [item['Type'] for item in [i for i in rt_connection.get_ticket_history(ticket_id)]].count('Correspond') == 1
+    assert (rt_connection.tickets.get(ticket_id))['Status'] != 'invalid'
+    assert [item['Type'] for item in [i for i in rt_connection.tickets.history(ticket_id)]].count('Correspond') == 1
 
 
 @requires_rt_setup
 def test_comment_custom_fields_and_roles(rt_connection: Rt):
-    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Custom fields of comments', content='Test')
+    ticket_id = rt_connection.tickets.create(RT_QUEUE, subject='Custom fields of comments', content='Test')
     value = f"it's {random_string()}"
 
-    assert (rt_connection.comment(ticket_id, 'Comment', custom_fields={RT_CUSTOM_FIELD: value}, custom_roles={RT_CUSTOM_ROLE: RT_USER})).complete
-    ticket = rt_connection.get_ticket(ticket_id)
+    assert (rt_connection.tickets.comment(ticket_id, 'Comment', custom_fields={RT_CUSTOM_FIELD: value}, custom_roles={RT_CUSTOM_ROLE: RT_USER})).complete
+    ticket = rt_connection.tickets.get(ticket_id)
     assert [field['values'] for field in ticket['CustomFields'] if field['name'] == RT_CUSTOM_FIELD] == [[value]]
     assert ticket['CustomRoles'][RT_CUSTOM_ROLE]['id'] == RT_USER
 
@@ -163,9 +163,9 @@ def test_reply_fields_are_only_sent_if_specified():
         return httpx2.Response(201, json=['Correspondence added'])
 
     with Rt(url=RT_URL, client=httpx2.Client(transport=httpx2.MockTransport(handler))) as tracker:
-        tracker.reply(1, 'Text')
-        tracker.comment(1, 'Text', status='resolved', custom_fields={'Severity': 'High'}, txn_custom_fields={'Notes': 'x'})
-        tracker.reply(
+        tracker.tickets.reply(1, 'Text')
+        tracker.tickets.comment(1, 'Text', status='resolved', custom_fields={'Severity': 'High'}, txn_custom_fields={'Notes': 'x'})
+        tracker.tickets.reply(
             1, 'Text', attachments=[Attachment('a.txt', 'text/plain', b'a')], subject='Subject', time_taken=0, custom_roles={'Manager': ['alice', 'bob']}
         )
 
@@ -180,14 +180,14 @@ def test_reply_fields_are_only_sent_if_specified():
 
 
 def test_get_ticket_messages(rt_connection: Rt):
-    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Messages', content='Initial text')
-    rt_connection.reply(ticket_id, '<p>HTML <b>reply</b></p>', content_type='text/html')
-    rt_connection.comment(ticket_id, 'Comment with file', attachments=[Attachment('a.txt', 'text/plain', b'file content')], time_taken=7)
-    rt_connection.comment(ticket_id, attachments=[Attachment('only.bin', 'application/octet-stream', b'\x00\x01')])
+    ticket_id = rt_connection.tickets.create(RT_QUEUE, subject='Messages', content='Initial text')
+    rt_connection.tickets.reply(ticket_id, '<p>HTML <b>reply</b></p>', content_type='text/html')
+    rt_connection.tickets.comment(ticket_id, 'Comment with file', attachments=[Attachment('a.txt', 'text/plain', b'file content')], time_taken=7)
+    rt_connection.tickets.comment(ticket_id, attachments=[Attachment('only.bin', 'application/octet-stream', b'\x00\x01')])
     # no message
-    rt_connection.edit_ticket(ticket_id, Subject='Messages changed')
+    rt_connection.tickets.edit(ticket_id, Subject='Messages changed')
 
-    messages = [message for message in rt_connection.get_ticket_messages(ticket_id)]
+    messages = [message for message in rt_connection.tickets.messages(ticket_id)]
 
     assert [message['Type'] for message in messages] == ['Create', 'Correspond', 'Comment', 'Comment']
     assert messages[0]['Content'] == 'Initial text'
@@ -202,37 +202,37 @@ def test_get_ticket_messages(rt_connection: Rt):
     assert [int(message['id']) for message in messages] == sorted(int(message['id']) for message in messages)
 
     # the history (all transactions) and single transactions are still available
-    history = [item for item in rt_connection.get_ticket_history(ticket_id)]
+    history = [item for item in rt_connection.tickets.history(ticket_id)]
     assert {item['id'] for item in history} > {message['id'] for message in messages}
-    transaction = rt_connection.get_transaction(messages[2]['id'])
+    transaction = rt_connection.tickets.get_transaction(messages[2]['id'])
     assert transaction['Type'] == 'Comment'
 
 
 def test_get_ticket_messages_all_pages(rt_connection: Rt):
     # not '0', which RT (Perl) takes as no content
-    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Many messages', content='message 0')
+    ticket_id = rt_connection.tickets.create(RT_QUEUE, subject='Many messages', content='message 0')
     for number in range(1, 5):
-        rt_connection.comment(ticket_id, f'message {number}')
+        rt_connection.tickets.comment(ticket_id, f'message {number}')
 
     with Rt(url=RT_URL, http_auth=httpx2.BasicAuth(RT_USER, RT_PASSWORD), http_timeout=None, per_page=2) as tracker:
-        contents = [message['Content'] for message in tracker.get_ticket_messages(ticket_id)]
+        contents = [message['Content'] for message in tracker.tickets.messages(ticket_id)]
 
     assert contents == [f'message {number}' for number in range(5)]
 
 
 def test_get_ticket_messages_unknown_ticket(rt_connection: Rt):
-    assert [message for message in rt_connection.get_ticket_messages(999999)] == []
+    assert [message for message in rt_connection.tickets.messages(999999)] == []
 
 
 def test_search_transactions(rt_connection: Rt):
-    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Search transactions', content='Initial text')
-    rt_connection.comment(ticket_id, 'first')
-    rt_connection.comment(ticket_id, 'second')
-    rt_connection.reply(ticket_id, 'reply')
+    ticket_id = rt_connection.tickets.create(RT_QUEUE, subject='Search transactions', content='Initial text')
+    rt_connection.tickets.comment(ticket_id, 'first')
+    rt_connection.tickets.comment(ticket_id, 'second')
+    rt_connection.tickets.reply(ticket_id, 'reply')
 
     by_conditions = [
         (item['Type'], item['Content'])
-        for item in rt_connection.search_transactions(
+        for item in rt_connection.tickets.search_transactions(
             search_params=[{'field': 'ObjectId', 'value': ticket_id}, {'field': 'ObjectType', 'value': 'RT::Ticket'}, {'field': 'Type', 'value': 'Comment'}],
             fields=['Type', 'Content'],
             order='id',
@@ -242,7 +242,7 @@ def test_search_transactions(rt_connection: Rt):
 
     by_query = [
         item['Content']
-        for item in rt_connection.search_transactions(
+        for item in rt_connection.tickets.search_transactions(
             raw_query=f"ObjectType = 'RT::Ticket' AND ObjectId = {ticket_id} AND (Type = 'Comment' OR Type = 'Correspond')",
             fields='Content',
             order='-id',
@@ -250,11 +250,11 @@ def test_search_transactions(rt_connection: Rt):
     ]
     assert by_query == ['reply', 'second', 'first']
 
-    default_fields = [item for item in rt_connection.search_transactions(search_params=[{'field': 'ObjectId', 'value': ticket_id}])]
+    default_fields = [item for item in rt_connection.tickets.search_transactions(search_params=[{'field': 'ObjectId', 'value': ticket_id}])]
     assert {'Type', 'Created', 'Creator', 'ObjectType', 'ObjectId'} <= set(default_fields[0])
 
     with pytest.raises(rt.exceptions.BadRequestError):
-        [item for item in rt_connection.search_transactions(raw_query='Invalid ==== 1')]
+        [item for item in rt_connection.tickets.search_transactions(raw_query='Invalid ==== 1')]
 
 
 def test_search_transactions_request():
@@ -265,8 +265,8 @@ def test_search_transactions_request():
         return httpx2.Response(200, json={'page': 1, 'per_page': 100, 'pages': 0, 'total': 0, 'count': 0, 'items': []})
 
     with Rt(url=RT_URL, client=httpx2.Client(transport=httpx2.MockTransport(handler))) as tracker:
-        [item for item in tracker.search_transactions(raw_query="Type = 'Comment'", order='-Created')]
-        [item for item in tracker.search_transactions(search_params=[{'field': 'Type', 'value': 'Comment'}])]
+        [item for item in tracker.tickets.search_transactions(raw_query="Type = 'Comment'", order='-Created')]
+        [item for item in tracker.tickets.search_transactions(search_params=[{'field': 'Type', 'value': 'Comment'}])]
 
     sql_request, json_request = requests
     assert sql_request.method == 'POST'
@@ -291,7 +291,7 @@ def test_search_transactions_invalid_use(arguments: dict[str, typing.Any]):
 
     with Rt(url=RT_URL, client=httpx2.Client(transport=httpx2.MockTransport(no_request))) as tracker:
         with pytest.raises(rt.exceptions.InvalidUseError):
-            [item for item in tracker.search_transactions(**arguments)]
+            [item for item in tracker.tickets.search_transactions(**arguments)]
 
 
 # --- attachment search ---------------------------------------------------------------------------------------------
@@ -299,49 +299,54 @@ def test_search_transactions_invalid_use(arguments: dict[str, typing.Any]):
 
 def test_search_attachments(rt_connection: Rt):
     prefix = f'search-{random_string()}'
-    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Attachment search', content='Test')
-    rt_connection.comment(
+    ticket_id = rt_connection.tickets.create(RT_QUEUE, subject='Attachment search', content='Test')
+    rt_connection.tickets.comment(
         ticket_id,
         'Files',
         attachments=[Attachment(f'{prefix}-a.pdf', 'application/pdf', b'%PDF-1.4'), Attachment(f'{prefix}-b.txt', 'text/plain', b'text')],
     )
-    rt_connection.comment(ticket_id, 'Another file', attachments=[Attachment(f'{prefix}-c.txt', 'text/plain', b'more')])
+    rt_connection.tickets.comment(ticket_id, 'Another file', attachments=[Attachment(f'{prefix}-c.txt', 'text/plain', b'more')])
     by_prefix = [{'field': 'Filename', 'operator': 'LIKE', 'value': prefix}]
 
-    found = [item for item in rt_connection.search_attachments(search_params=by_prefix)]
+    found = [item for item in rt_connection.tickets.search_attachments(search_params=by_prefix)]
     assert sorted(item['Filename'] for item in found) == [f'{prefix}-a.pdf', f'{prefix}-b.txt', f'{prefix}-c.txt']
     assert {'Filename', 'ContentType', 'ContentLength', 'TransactionId', 'Created'} <= set(found[0])
 
-    pdfs = [item['Filename'] for item in rt_connection.search_attachments(search_params=[*by_prefix, {'field': 'ContentType', 'value': 'application/pdf'}])]
+    pdfs = [
+        item['Filename'] for item in rt_connection.tickets.search_attachments(search_params=[*by_prefix, {'field': 'ContentType', 'value': 'application/pdf'}])
+    ]
     assert pdfs == [f'{prefix}-a.pdf']
 
     # conditions on the file name stay combined with OR, although only files are returned
     either = [{'field': 'Filename', 'value': f'{prefix}-a.pdf'}, {'field': 'Filename', 'value': f'{prefix}-c.txt'}]
-    assert sorted([item['Filename'] for item in rt_connection.search_attachments(search_params=either)]) == [f'{prefix}-a.pdf', f'{prefix}-c.txt']
+    assert sorted([item['Filename'] for item in rt_connection.tickets.search_attachments(search_params=either)]) == [
+        f'{prefix}-a.pdf',
+        f'{prefix}-c.txt',
+    ]
 
     # the files of a single comment, with search_attachments and with get_attachments
     transaction_id = next(item['TransactionId'] for item in found if item['Filename'] == f'{prefix}-c.txt')
     of_transaction = [{'field': 'TransactionId', 'value': transaction_id}]
-    assert [item['Filename'] for item in rt_connection.search_attachments(search_params=of_transaction)] == [f'{prefix}-c.txt']
-    assert [item['Filename'] for item in rt_connection.get_attachments(ticket_id, search_params=of_transaction)] == [f'{prefix}-c.txt']
+    assert [item['Filename'] for item in rt_connection.tickets.search_attachments(search_params=of_transaction)] == [f'{prefix}-c.txt']
+    assert [item['Filename'] for item in rt_connection.tickets.get_attachments(ticket_id, search_params=of_transaction)] == [f'{prefix}-c.txt']
 
     # all parts of the message: the container, the text of the message and the file
-    parts = [item for item in rt_connection.search_attachments(search_params=of_transaction, files_only=False)]
+    parts = [item for item in rt_connection.tickets.search_attachments(search_params=of_transaction, files_only=False)]
     assert len(parts) == 3
     assert sorted(item['Filename'] for item in parts) == ['', '', f'{prefix}-c.txt']
 
 
 def test_search_attachments_rights(rt_connection: Rt):
     prefix = f'rights-{random_string()}'
-    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Attachment rights', content='Test')
-    rt_connection.comment(ticket_id, 'File', attachments=[Attachment(f'{prefix}.txt', 'text/plain', b'secret')])
+    ticket_id = rt_connection.tickets.create(RT_QUEUE, subject='Attachment rights', content='Test')
+    rt_connection.tickets.comment(ticket_id, 'File', attachments=[Attachment(f'{prefix}.txt', 'text/plain', b'secret')])
     user_name = f'user-{random_string()}'
-    rt_connection.create_user(user_name, f'{user_name}@example.com', Password='password-of-test-user', Privileged=1)
+    rt_connection.users.create(user_name, f'{user_name}@example.com', Password='password-of-test-user', Privileged=1)
     condition = [{'field': 'Filename', 'value': f'{prefix}.txt'}]
 
-    assert len([item for item in rt_connection.search_attachments(search_params=condition)]) == 1
+    assert len([item for item in rt_connection.tickets.search_attachments(search_params=condition)]) == 1
     with Rt(url=RT_URL, http_auth=httpx2.BasicAuth(user_name, 'password-of-test-user'), http_timeout=None) as tracker:
-        assert [item for item in tracker.search_attachments(search_params=condition)] == []
+        assert [item for item in tracker.tickets.search_attachments(search_params=condition)] == []
 
 
 def test_search_attachments_conditions():
@@ -354,10 +359,10 @@ def test_search_attachments_conditions():
     files_only = {'field': 'Filename', 'operator': 'IS NOT', 'value': '', 'entry_aggregator': 'AND'}
     search_params = [{'field': 'Filename', 'value': 'a.pdf'}]
     with Rt(url=RT_URL, client=httpx2.Client(transport=httpx2.MockTransport(handler))) as tracker:
-        [item for item in tracker.search_attachments()]
-        [item for item in tracker.search_attachments(search_params=search_params)]
-        [item for item in tracker.search_attachments(files_only=False)]
-        [item for item in tracker.search_attachments(search_params=search_params, files_only=False)]
+        [item for item in tracker.tickets.search_attachments()]
+        [item for item in tracker.tickets.search_attachments(search_params=search_params)]
+        [item for item in tracker.tickets.search_attachments(files_only=False)]
+        [item for item in tracker.tickets.search_attachments(search_params=search_params, files_only=False)]
 
     assert conditions == [
         [files_only],

@@ -51,13 +51,13 @@ async def test_ticket_attachments(async_rt_connection: AsyncRt):
     attachment_name = 'attachment-name.txt'
 
     attachment = Attachment(attachment_name, 'text/plain', attachment_content)
-    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment])
+    ticket_id = await async_rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE, attachments=[attachment])
     assert ticket_id
 
-    att_ids = [item async for item in async_rt_connection.get_attachments_ids(ticket_id)]
+    att_ids = [item async for item in async_rt_connection.tickets.get_attachments_ids(ticket_id)]
     assert len(att_ids) == 1
 
-    att_list = [item async for item in async_rt_connection.get_attachments(ticket_id)]
+    att_list = [item async for item in async_rt_connection.tickets.get_attachments(ticket_id)]
     assert len(att_list) == 1
 
     att_names = [att['Filename'] for att in att_list]
@@ -65,20 +65,24 @@ async def test_ticket_attachments(async_rt_connection: AsyncRt):
 
     # get the attachment and compare it's content
     att_id = att_list[att_names.index(attachment_name)]['id']
-    att_content = base64.b64decode((await async_rt_connection.get_attachment(att_id))['Content'])
+    att_content = base64.b64decode((await async_rt_connection.tickets.get_attachment(att_id))['Content'])
     assert att_content == attachment_content
 
     # test filter parameters
-    att_ids = [item async for item in async_rt_connection.get_attachments_ids(ticket_id)]
+    att_ids = [item async for item in async_rt_connection.tickets.get_attachments_ids(ticket_id)]
     assert len(att_ids) == 1
 
     # all parts of the message, not only the file
-    att_ids = [item async for item in async_rt_connection.get_attachments_ids(ticket_id, files_only=False)]
+    att_ids = [item async for item in async_rt_connection.tickets.get_attachments_ids(ticket_id, files_only=False)]
     assert len(att_ids) == 3
 
-    att_ids = [item async for item in async_rt_connection.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': 'non-existant.txt'}])]
+    att_ids = [
+        item async for item in async_rt_connection.tickets.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': 'non-existant.txt'}])
+    ]
     assert not att_ids
-    att_ids = [item async for item in async_rt_connection.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': attachment_name}])]
+    att_ids = [
+        item async for item in async_rt_connection.tickets.get_attachments_ids(ticket_id, search_params=[{'field': 'Filename', 'value': attachment_name}])
+    ]
     assert len(att_ids) == 1
 
 
@@ -87,18 +91,18 @@ async def test_ticket_take(async_rt_connection: AsyncRt):
     ticket_subject = f'Testing issue {random_string()}'
     ticket_text = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
 
-    ticket_id = await async_rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
+    ticket_id = await async_rt_connection.tickets.create(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id
 
-    assert (await async_rt_connection.take(ticket_id)).complete
+    assert (await async_rt_connection.tickets.take(ticket_id)).complete
     with pytest.raises(rt.exceptions.InvalidUseError, match='already owns'):
-        await async_rt_connection.take(ticket_id)
+        await async_rt_connection.tickets.take(ticket_id)
 
-    assert (await async_rt_connection.untake(ticket_id)).complete
+    assert (await async_rt_connection.tickets.untake(ticket_id)).complete
 
     # RT only steals tickets owned by another user, the ticket is owned by Nobody now
     with pytest.raises(rt.exceptions.InvalidUseError, match='someone else'):
-        await async_rt_connection.steal(ticket_id)
+        await async_rt_connection.tickets.steal(ticket_id)
 
 
 # --- fields of replies and comments ----------------------------------------------------------------------------------
@@ -106,43 +110,45 @@ async def test_ticket_take(async_rt_connection: AsyncRt):
 
 async def test_reply_and_comment_fields(async_rt_connection: AsyncRt):
     queue_name = f'queue-{random_string()}'
-    queue_id = await async_rt_connection.create_queue(queue_name)
+    queue_id = await async_rt_connection.queues.create(queue_name)
     txn_field = f'cf-{random_string()}'
-    txn_field_id = await async_rt_connection.create_custom_field(txn_field, 'Freeform', 'RT::Queue-RT::Ticket-RT::Transaction', MaxValues=1)
-    await async_rt_connection.apply_custom_field(txn_field_id, queue_id)
-    ticket_id = await async_rt_connection.create_ticket(queue_name, subject='Fields of replies', content='Test')
+    txn_field_id = await async_rt_connection.custom_fields.create(txn_field, 'Freeform', 'RT::Queue-RT::Ticket-RT::Transaction', MaxValues=1)
+    await async_rt_connection.custom_fields.apply(txn_field_id, queue_id)
+    ticket_id = await async_rt_connection.tickets.create(queue_name, subject='Fields of replies', content='Test')
 
-    assert (await async_rt_connection.reply(ticket_id, 'Reply', subject='Other subject', time_taken=5, status='stalled')).complete
-    assert (await async_rt_connection.comment(ticket_id, 'Comment', time_taken=3, txn_custom_fields={txn_field: 'value'})).complete
+    assert (await async_rt_connection.tickets.reply(ticket_id, 'Reply', subject='Other subject', time_taken=5, status='stalled')).complete
+    assert (await async_rt_connection.tickets.comment(ticket_id, 'Comment', time_taken=3, txn_custom_fields={txn_field: 'value'})).complete
 
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     assert ticket['Status'] == 'stalled'
     assert ticket['TimeWorked'] == '8'
-    history = [item async for item in async_rt_connection.get_ticket_history(ticket_id)]
+    history = [item async for item in async_rt_connection.tickets.history(ticket_id)]
     assert [item['Type'] for item in history].count('Correspond') == 1
 
 
 async def test_reply_invalid_status(async_rt_connection: AsyncRt):
-    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Invalid status', content='Test')
+    ticket_id = await async_rt_connection.tickets.create(RT_QUEUE, subject='Invalid status', content='Test')
 
     # RT adds the reply and reports the refused status only in a message; the result is true as the reply was added
-    result = await async_rt_connection.reply(ticket_id, 'Reply', status='invalid')
+    result = await async_rt_connection.tickets.reply(ticket_id, 'Reply', status='invalid')
     assert result
     assert not result.complete
     assert "Status 'invalid' isn't a valid status for this ticket." in result.refused
     assert result.messages[0] == 'Correspondence added'
 
-    assert (await async_rt_connection.get_ticket(ticket_id))['Status'] != 'invalid'
-    assert [item['Type'] for item in [i async for i in async_rt_connection.get_ticket_history(ticket_id)]].count('Correspond') == 1
+    assert (await async_rt_connection.tickets.get(ticket_id))['Status'] != 'invalid'
+    assert [item['Type'] for item in [i async for i in async_rt_connection.tickets.history(ticket_id)]].count('Correspond') == 1
 
 
 @requires_rt_setup
 async def test_comment_custom_fields_and_roles(async_rt_connection: AsyncRt):
-    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Custom fields of comments', content='Test')
+    ticket_id = await async_rt_connection.tickets.create(RT_QUEUE, subject='Custom fields of comments', content='Test')
     value = f"it's {random_string()}"
 
-    assert (await async_rt_connection.comment(ticket_id, 'Comment', custom_fields={RT_CUSTOM_FIELD: value}, custom_roles={RT_CUSTOM_ROLE: RT_USER})).complete
-    ticket = await async_rt_connection.get_ticket(ticket_id)
+    assert (
+        await async_rt_connection.tickets.comment(ticket_id, 'Comment', custom_fields={RT_CUSTOM_FIELD: value}, custom_roles={RT_CUSTOM_ROLE: RT_USER})
+    ).complete
+    ticket = await async_rt_connection.tickets.get(ticket_id)
     assert [field['values'] for field in ticket['CustomFields'] if field['name'] == RT_CUSTOM_FIELD] == [[value]]
     assert ticket['CustomRoles'][RT_CUSTOM_ROLE]['id'] == RT_USER
 
@@ -160,9 +166,9 @@ async def test_reply_fields_are_only_sent_if_specified():
         return httpx2.Response(201, json=['Correspondence added'])
 
     async with AsyncRt(url=RT_URL, client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler))) as tracker:
-        await tracker.reply(1, 'Text')
-        await tracker.comment(1, 'Text', status='resolved', custom_fields={'Severity': 'High'}, txn_custom_fields={'Notes': 'x'})
-        await tracker.reply(
+        await tracker.tickets.reply(1, 'Text')
+        await tracker.tickets.comment(1, 'Text', status='resolved', custom_fields={'Severity': 'High'}, txn_custom_fields={'Notes': 'x'})
+        await tracker.tickets.reply(
             1, 'Text', attachments=[Attachment('a.txt', 'text/plain', b'a')], subject='Subject', time_taken=0, custom_roles={'Manager': ['alice', 'bob']}
         )
 
@@ -177,14 +183,14 @@ async def test_reply_fields_are_only_sent_if_specified():
 
 
 async def test_get_ticket_messages(async_rt_connection: AsyncRt):
-    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Messages', content='Initial text')
-    await async_rt_connection.reply(ticket_id, '<p>HTML <b>reply</b></p>', content_type='text/html')
-    await async_rt_connection.comment(ticket_id, 'Comment with file', attachments=[Attachment('a.txt', 'text/plain', b'file content')], time_taken=7)
-    await async_rt_connection.comment(ticket_id, attachments=[Attachment('only.bin', 'application/octet-stream', b'\x00\x01')])
+    ticket_id = await async_rt_connection.tickets.create(RT_QUEUE, subject='Messages', content='Initial text')
+    await async_rt_connection.tickets.reply(ticket_id, '<p>HTML <b>reply</b></p>', content_type='text/html')
+    await async_rt_connection.tickets.comment(ticket_id, 'Comment with file', attachments=[Attachment('a.txt', 'text/plain', b'file content')], time_taken=7)
+    await async_rt_connection.tickets.comment(ticket_id, attachments=[Attachment('only.bin', 'application/octet-stream', b'\x00\x01')])
     # no message
-    await async_rt_connection.edit_ticket(ticket_id, Subject='Messages changed')
+    await async_rt_connection.tickets.edit(ticket_id, Subject='Messages changed')
 
-    messages = [message async for message in async_rt_connection.get_ticket_messages(ticket_id)]
+    messages = [message async for message in async_rt_connection.tickets.messages(ticket_id)]
 
     assert [message['Type'] for message in messages] == ['Create', 'Correspond', 'Comment', 'Comment']
     assert messages[0]['Content'] == 'Initial text'
@@ -199,37 +205,37 @@ async def test_get_ticket_messages(async_rt_connection: AsyncRt):
     assert [int(message['id']) for message in messages] == sorted(int(message['id']) for message in messages)
 
     # the history (all transactions) and single transactions are still available
-    history = [item async for item in async_rt_connection.get_ticket_history(ticket_id)]
+    history = [item async for item in async_rt_connection.tickets.history(ticket_id)]
     assert {item['id'] for item in history} > {message['id'] for message in messages}
-    transaction = await async_rt_connection.get_transaction(messages[2]['id'])
+    transaction = await async_rt_connection.tickets.get_transaction(messages[2]['id'])
     assert transaction['Type'] == 'Comment'
 
 
 async def test_get_ticket_messages_all_pages(async_rt_connection: AsyncRt):
     # not '0', which RT (Perl) takes as no content
-    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Many messages', content='message 0')
+    ticket_id = await async_rt_connection.tickets.create(RT_QUEUE, subject='Many messages', content='message 0')
     for number in range(1, 5):
-        await async_rt_connection.comment(ticket_id, f'message {number}')
+        await async_rt_connection.tickets.comment(ticket_id, f'message {number}')
 
     async with AsyncRt(url=RT_URL, http_auth=httpx2.BasicAuth(RT_USER, RT_PASSWORD), http_timeout=None, per_page=2) as tracker:
-        contents = [message['Content'] async for message in tracker.get_ticket_messages(ticket_id)]
+        contents = [message['Content'] async for message in tracker.tickets.messages(ticket_id)]
 
     assert contents == [f'message {number}' for number in range(5)]
 
 
 async def test_get_ticket_messages_unknown_ticket(async_rt_connection: AsyncRt):
-    assert [message async for message in async_rt_connection.get_ticket_messages(999999)] == []
+    assert [message async for message in async_rt_connection.tickets.messages(999999)] == []
 
 
 async def test_search_transactions(async_rt_connection: AsyncRt):
-    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Search transactions', content='Initial text')
-    await async_rt_connection.comment(ticket_id, 'first')
-    await async_rt_connection.comment(ticket_id, 'second')
-    await async_rt_connection.reply(ticket_id, 'reply')
+    ticket_id = await async_rt_connection.tickets.create(RT_QUEUE, subject='Search transactions', content='Initial text')
+    await async_rt_connection.tickets.comment(ticket_id, 'first')
+    await async_rt_connection.tickets.comment(ticket_id, 'second')
+    await async_rt_connection.tickets.reply(ticket_id, 'reply')
 
     by_conditions = [
         (item['Type'], item['Content'])
-        async for item in async_rt_connection.search_transactions(
+        async for item in async_rt_connection.tickets.search_transactions(
             search_params=[{'field': 'ObjectId', 'value': ticket_id}, {'field': 'ObjectType', 'value': 'RT::Ticket'}, {'field': 'Type', 'value': 'Comment'}],
             fields=['Type', 'Content'],
             order='id',
@@ -239,7 +245,7 @@ async def test_search_transactions(async_rt_connection: AsyncRt):
 
     by_query = [
         item['Content']
-        async for item in async_rt_connection.search_transactions(
+        async for item in async_rt_connection.tickets.search_transactions(
             raw_query=f"ObjectType = 'RT::Ticket' AND ObjectId = {ticket_id} AND (Type = 'Comment' OR Type = 'Correspond')",
             fields='Content',
             order='-id',
@@ -247,11 +253,11 @@ async def test_search_transactions(async_rt_connection: AsyncRt):
     ]
     assert by_query == ['reply', 'second', 'first']
 
-    default_fields = [item async for item in async_rt_connection.search_transactions(search_params=[{'field': 'ObjectId', 'value': ticket_id}])]
+    default_fields = [item async for item in async_rt_connection.tickets.search_transactions(search_params=[{'field': 'ObjectId', 'value': ticket_id}])]
     assert {'Type', 'Created', 'Creator', 'ObjectType', 'ObjectId'} <= set(default_fields[0])
 
     with pytest.raises(rt.exceptions.BadRequestError):
-        [item async for item in async_rt_connection.search_transactions(raw_query='Invalid ==== 1')]
+        [item async for item in async_rt_connection.tickets.search_transactions(raw_query='Invalid ==== 1')]
 
 
 async def test_search_transactions_request():
@@ -262,8 +268,8 @@ async def test_search_transactions_request():
         return httpx2.Response(200, json={'page': 1, 'per_page': 100, 'pages': 0, 'total': 0, 'count': 0, 'items': []})
 
     async with AsyncRt(url=RT_URL, client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler))) as tracker:
-        [item async for item in tracker.search_transactions(raw_query="Type = 'Comment'", order='-Created')]
-        [item async for item in tracker.search_transactions(search_params=[{'field': 'Type', 'value': 'Comment'}])]
+        [item async for item in tracker.tickets.search_transactions(raw_query="Type = 'Comment'", order='-Created')]
+        [item async for item in tracker.tickets.search_transactions(search_params=[{'field': 'Type', 'value': 'Comment'}])]
 
     sql_request, json_request = requests
     assert sql_request.method == 'POST'
@@ -288,7 +294,7 @@ async def test_search_transactions_invalid_use(arguments: dict[str, typing.Any])
 
     async with AsyncRt(url=RT_URL, client=httpx2.AsyncClient(transport=httpx2.MockTransport(no_request))) as tracker:
         with pytest.raises(rt.exceptions.InvalidUseError):
-            [item async for item in tracker.search_transactions(**arguments)]
+            [item async for item in tracker.tickets.search_transactions(**arguments)]
 
 
 # --- attachment search ---------------------------------------------------------------------------------------------
@@ -296,52 +302,55 @@ async def test_search_transactions_invalid_use(arguments: dict[str, typing.Any])
 
 async def test_search_attachments(async_rt_connection: AsyncRt):
     prefix = f'search-{random_string()}'
-    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Attachment search', content='Test')
-    await async_rt_connection.comment(
+    ticket_id = await async_rt_connection.tickets.create(RT_QUEUE, subject='Attachment search', content='Test')
+    await async_rt_connection.tickets.comment(
         ticket_id,
         'Files',
         attachments=[Attachment(f'{prefix}-a.pdf', 'application/pdf', b'%PDF-1.4'), Attachment(f'{prefix}-b.txt', 'text/plain', b'text')],
     )
-    await async_rt_connection.comment(ticket_id, 'Another file', attachments=[Attachment(f'{prefix}-c.txt', 'text/plain', b'more')])
+    await async_rt_connection.tickets.comment(ticket_id, 'Another file', attachments=[Attachment(f'{prefix}-c.txt', 'text/plain', b'more')])
     by_prefix = [{'field': 'Filename', 'operator': 'LIKE', 'value': prefix}]
 
-    found = [item async for item in async_rt_connection.search_attachments(search_params=by_prefix)]
+    found = [item async for item in async_rt_connection.tickets.search_attachments(search_params=by_prefix)]
     assert sorted(item['Filename'] for item in found) == [f'{prefix}-a.pdf', f'{prefix}-b.txt', f'{prefix}-c.txt']
     assert {'Filename', 'ContentType', 'ContentLength', 'TransactionId', 'Created'} <= set(found[0])
 
     pdfs = [
         item['Filename']
-        async for item in async_rt_connection.search_attachments(search_params=[*by_prefix, {'field': 'ContentType', 'value': 'application/pdf'}])
+        async for item in async_rt_connection.tickets.search_attachments(search_params=[*by_prefix, {'field': 'ContentType', 'value': 'application/pdf'}])
     ]
     assert pdfs == [f'{prefix}-a.pdf']
 
     # conditions on the file name stay combined with OR, although only files are returned
     either = [{'field': 'Filename', 'value': f'{prefix}-a.pdf'}, {'field': 'Filename', 'value': f'{prefix}-c.txt'}]
-    assert sorted([item['Filename'] async for item in async_rt_connection.search_attachments(search_params=either)]) == [f'{prefix}-a.pdf', f'{prefix}-c.txt']
+    assert sorted([item['Filename'] async for item in async_rt_connection.tickets.search_attachments(search_params=either)]) == [
+        f'{prefix}-a.pdf',
+        f'{prefix}-c.txt',
+    ]
 
     # the files of a single comment, with search_attachments and with get_attachments
     transaction_id = next(item['TransactionId'] for item in found if item['Filename'] == f'{prefix}-c.txt')
     of_transaction = [{'field': 'TransactionId', 'value': transaction_id}]
-    assert [item['Filename'] async for item in async_rt_connection.search_attachments(search_params=of_transaction)] == [f'{prefix}-c.txt']
-    assert [item['Filename'] async for item in async_rt_connection.get_attachments(ticket_id, search_params=of_transaction)] == [f'{prefix}-c.txt']
+    assert [item['Filename'] async for item in async_rt_connection.tickets.search_attachments(search_params=of_transaction)] == [f'{prefix}-c.txt']
+    assert [item['Filename'] async for item in async_rt_connection.tickets.get_attachments(ticket_id, search_params=of_transaction)] == [f'{prefix}-c.txt']
 
     # all parts of the message: the container, the text of the message and the file
-    parts = [item async for item in async_rt_connection.search_attachments(search_params=of_transaction, files_only=False)]
+    parts = [item async for item in async_rt_connection.tickets.search_attachments(search_params=of_transaction, files_only=False)]
     assert len(parts) == 3
     assert sorted(item['Filename'] for item in parts) == ['', '', f'{prefix}-c.txt']
 
 
 async def test_search_attachments_rights(async_rt_connection: AsyncRt):
     prefix = f'rights-{random_string()}'
-    ticket_id = await async_rt_connection.create_ticket(RT_QUEUE, subject='Attachment rights', content='Test')
-    await async_rt_connection.comment(ticket_id, 'File', attachments=[Attachment(f'{prefix}.txt', 'text/plain', b'secret')])
+    ticket_id = await async_rt_connection.tickets.create(RT_QUEUE, subject='Attachment rights', content='Test')
+    await async_rt_connection.tickets.comment(ticket_id, 'File', attachments=[Attachment(f'{prefix}.txt', 'text/plain', b'secret')])
     user_name = f'user-{random_string()}'
-    await async_rt_connection.create_user(user_name, f'{user_name}@example.com', Password='password-of-test-user', Privileged=1)
+    await async_rt_connection.users.create(user_name, f'{user_name}@example.com', Password='password-of-test-user', Privileged=1)
     condition = [{'field': 'Filename', 'value': f'{prefix}.txt'}]
 
-    assert len([item async for item in async_rt_connection.search_attachments(search_params=condition)]) == 1
+    assert len([item async for item in async_rt_connection.tickets.search_attachments(search_params=condition)]) == 1
     async with AsyncRt(url=RT_URL, http_auth=httpx2.BasicAuth(user_name, 'password-of-test-user'), http_timeout=None) as tracker:
-        assert [item async for item in tracker.search_attachments(search_params=condition)] == []
+        assert [item async for item in tracker.tickets.search_attachments(search_params=condition)] == []
 
 
 async def test_search_attachments_conditions():
@@ -354,10 +363,10 @@ async def test_search_attachments_conditions():
     files_only = {'field': 'Filename', 'operator': 'IS NOT', 'value': '', 'entry_aggregator': 'AND'}
     search_params = [{'field': 'Filename', 'value': 'a.pdf'}]
     async with AsyncRt(url=RT_URL, client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler))) as tracker:
-        [item async for item in tracker.search_attachments()]
-        [item async for item in tracker.search_attachments(search_params=search_params)]
-        [item async for item in tracker.search_attachments(files_only=False)]
-        [item async for item in tracker.search_attachments(search_params=search_params, files_only=False)]
+        [item async for item in tracker.tickets.search_attachments()]
+        [item async for item in tracker.tickets.search_attachments(search_params=search_params)]
+        [item async for item in tracker.tickets.search_attachments(files_only=False)]
+        [item async for item in tracker.tickets.search_attachments(search_params=search_params, files_only=False)]
 
     assert conditions == [
         [files_only],

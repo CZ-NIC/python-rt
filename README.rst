@@ -83,34 +83,18 @@ An example is worth a thousand words::
     >>> tracker.reply(19, content='Do you know Starbucks?')
     ['Correspondence added']
 
-Get the last important updates from a specific queue that have been updated recently::
+Print the last reply or comment of the tickets of a queue which have been updated recently::
 
     >>> import datetime
-    >>> import base64
     >>> import rt.rest2
     >>> import httpx2
     >>> tracker = rt.rest2.Rt(url='http://localhost/rt/REST/2.0/', http_auth=httpx2.BasicAuth('root', 'password'))
     >>> fifteen_minutes_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
-    >>> tickets = tracker.last_updated(since=fifteen_minutes_ago, queue='helpdesk')
-    >>> for ticket in tickets:
-    >>>     id = ticket['id']
-    >>>     history = list(tracker.get_ticket_history(id))
-    >>>     last_update = list(reversed([h for h in history if h['Type'] in ('Correspond', 'Comment')]))
-    >>>     hid = tracker.get_transaction(last_update[0]['id'] if last_update else history[0]['id'])
-    >>>
-    >>>     attachment_id = None
-    >>>     for k in hid['_hyperlinks']:
-    >>>         if k['ref'] == 'attachment':
-    >>>             attachment_id = k['_url'].rsplit('/', 1)[1]
-    >>>             break
-    >>>
-    >>>     if attachment_id is not None:
-    >>>         attachment = tracker.get_attachment(attachment_id)
-    >>>         if attachment['Content'] is not None:
-    >>>             content = base64.b64decode(attachment['Content']).decode()
-    >>>             print(content)
+    >>> for ticket in tracker.last_updated(fifteen_minutes_ago, queue='helpdesk'):
+    ...     messages = list(tracker.get_ticket_messages(ticket['id']))
+    ...     print(ticket['id'], messages[-1]['Creator']['Name'], messages[-1]['Content'])
 
-
+See the documentation for more examples.
 
 Please use docstrings to see how to use different functions. They are written
 in ReStructuredText. You can also generate HTML documentation by running

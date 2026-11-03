@@ -971,3 +971,66 @@ def test_unexpected_status_message():
     client = _mock_client(lambda request: httpx2.Response(502, text=''))
     with pytest.raises(rt.exceptions.UnexpectedResponseError, match=r'Received status code 502 instead of 200\.$'):
         client.get_ticket(1)
+
+
+# --- check against the source of RT ------------------------------------------------------------------------------
+
+
+def test_user_fields(rt_connection: Rt):
+    user_name = f'user-{random_string()}'
+    rt_connection.create_user(user_name, f'{user_name}@example.com', NickName='Nick')
+
+    messages = rt_connection.edit_user(user_name, FreeformContactInfo='Room 2', Timezone='Europe/Berlin')
+
+    assert len(messages) == 2
+    user = rt_connection.get_user(user_name)
+    assert (user['NickName'], user['FreeformContactInfo'], user['Timezone']) == ('Nick', 'Room 2', 'Europe/Berlin')
+    # the names of fields of RT before 5.0, which RT ignores
+    for name in ('Nickname', 'ContactInfo', 'EmailEncoding', 'ExternalAuthId'):
+        with pytest.raises(rt.exceptions.InvalidUseError, match=name):
+            rt_connection.edit_user(user_name, **{name: 'x'})
+
+
+def test_history_fields(rt_connection: Rt):
+    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='History fields', content='Test')
+    rt_connection.edit_ticket(ticket_id, Status='open')
+
+    history = [item for item in rt_connection.get_ticket_history(ticket_id)]
+
+    # previously the history contained only the field Description, which RT returns always empty
+    status = [(item['Field'], item['OldValue'], item['NewValue']) for item in history if item['Type'] == 'Status']
+    assert status == [('Status', 'new', 'open')]
+    assert history[0]['Type'] == 'Create'
+    assert history[0]['Creator']['Name'] == RT_USER
+
+
+def test_fields_with_spaces():
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return _page(1, [], pages=0)
+
+    client = _mock_client(handler)
+    _collect(client.search_queues(fields='Name, Description'))
+    _collect(client.search_queues(fields=['Name', ' Description ']))
+    _collect(client.search(fields=['Subject', ' Status']))
+
+    # RT does not strip spaces around field names
+    assert [request.url.params['fields'] for request in requests] == ['Name,Description', 'Name,Description', 'Subject,Status']
+
+
+def test_queue_watcher_group(rt_connection: Rt):
+    group_name = f'group-{random_string()}'
+    group_id = rt_connection.create_group(group_name)
+    queue_id = rt_connection.create_queue(f'queue-{random_string()}')
+
+    rt_connection.edit_queue(queue_id, AdminCc=f'group:{group_name}')
+
+    assert [int(watcher['id']) for watcher in (rt_connection.get_queue(queue_id))['AdminCc']] == [group_id]
+
+
+def test_ticket_dates_are_utc(rt_connection: Rt):
+    ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Dates', content='Test', Due='2030-01-31 12:00:00')
+
+    assert (rt_connection.get_ticket(ticket_id))['Due'] == '2030-01-31T12:00:00Z'

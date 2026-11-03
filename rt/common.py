@@ -84,7 +84,7 @@ _USER_FIELDS = frozenset(
         'Password',
         'EmailAddress',
         'RealName',
-        'Nickname',
+        'NickName',
         'Gecos',
         'Organization',
         'Address1',
@@ -97,16 +97,12 @@ _USER_FIELDS = frozenset(
         'WorkPhone',
         'MobilePhone',
         'PagerPhone',
-        'ContactInfo',
+        'FreeformContactInfo',
         'Comments',
         'Signature',
         'Lang',
-        'EmailEncoding',
-        'WebEncoding',
-        'ExternalContactInfoId',
-        'ContactInfoSystem',
-        'ExternalAuthId',
-        'AuthSystem',
+        'Timezone',
+        'SMIMECertificate',
         'Privileged',
         'Disabled',
         'CustomFields',
@@ -238,7 +234,7 @@ def _search_fields_params(fields: SearchFormat | list[str] | dict[str, str]) -> 
                    or a dictionary with the query parameters to use.
     """
     if isinstance(fields, list):
-        return {'fields': ','.join(fields)}
+        return {'fields': ','.join(field.strip() for field in fields)}
 
     if isinstance(fields, dict):
         return dict(fields)
@@ -265,9 +261,10 @@ def _fields_params(fields: str | list[str] | dict[str, str] | None, default_fiel
     if isinstance(fields, dict):
         params.update(fields)
     elif isinstance(fields, list):
-        params['fields'] = ','.join(fields)
+        params['fields'] = ','.join(field.strip() for field in fields)
     elif isinstance(fields, str):
-        params['fields'] = fields
+        # RT does not strip spaces, e.g. 'Name, Description' would request the unknown field ' Description'
+        params['fields'] = ','.join(field.strip() for field in fields.split(','))
 
     return params
 

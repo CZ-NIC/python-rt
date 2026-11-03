@@ -241,6 +241,9 @@ Python 3.11 or newer is required.
 - REST2 `search_assets()` with a condition on `Catalog` in `search_params` returned the assets of all catalogs.
 - REST2 `edit_queue()` and `create_queue()` rejected the fields `SubjectTag`, `CustomFields`, `Cc` and `AdminCc`, which
   RT supports.
+- REST2 `edit_link()` and `merge_ticket()` require RT 5.0.1, where REST2 supports changing links and merging; they
+  raise `UnexpectedResponseError` with RT 5.0.0, which ignores the request (`edit_link()` returned an empty list
+  before, as if the link was changed).
 - REST2 `get_rights()` with `user` returned all rights of the object if the user did not exist, as RT ignores the
   filter then. Only rights of the given user are returned now.
 - REST2 `add_group_member()` raises `NotFoundError` instead of `InvalidUseError` if the member is a group which is not
@@ -299,6 +302,8 @@ Python 3.11 or newer is required.
 - REST2 `get_ticket_messages()` returns the creation, replies and comments of a ticket with their text and author in
   one request per 100 messages, instead of `get_ticket_history()` followed by `get_transaction()` for each entry
   (both remain available).
+- REST2 `edit_asset_link()` and `get_asset_links()` add, delete and return the links of assets, like `edit_link()`
+  and `get_links()` for tickets. Assets are linked as `'asset:<id>'`, e.g. `edit_link(1, 'RefersTo', 'asset:3')`.
 - REST2 `search_attachments()` searches files (or with `files_only=False` all parts of messages) across all
   tickets, e.g. by name, content type or creation time. The docstring of `get_attachments()` shows how to get the
   files of a single reply or comment.

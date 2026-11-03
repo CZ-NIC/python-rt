@@ -48,7 +48,7 @@ jobs:
 
       - name: Test with pytest
         run: |
-          uv run pytest -v tests
+          uv run pytest -v -m '' tests
 
 
   coverage:
@@ -85,7 +85,7 @@ jobs:
 
       - name: Generate coverage data
         run: |
-          uv run coverage run --omit tests --parallel-mode -m pytest tests
+          uv run coverage run --omit tests --parallel-mode -m pytest -m '' tests
 
       - name: Combine coverage & create xml report
         run: |
@@ -124,3 +124,18 @@ jobs:
 
       - name: codespell
         run: uv run codespell --ignore-words=.codespell_ignore rt
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - run: |
+          python3 -m pip install uv
+          uv sync --group docs
+
+      - name: Build the documentation, warnings (e.g. broken references in docstrings) are errors
+        run: uv run sphinx-build -W --keep-going -b html doc doc/_build/html

@@ -28,7 +28,21 @@ sys.path.insert(0, os.path.abspath('..'))
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode', 'sphinx_copybutton']
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode', 'sphinx.ext.intersphinx', 'sphinx_copybutton']
+
+# Links to the documentation of the types of the standard library used in signatures (e.g. collections.abc.Mapping).
+# The inventory is stored in the repository, so building the documentation does not fetch it from python.org each time.
+# Update it with: curl -o doc/inventories/python.inv https://docs.python.org/3.11/objects.inv
+intersphinx_mapping = {'python': ('https://docs.python.org/3.11', 'inventories/python.inv')}
+
+# Warn about references (e.g. in docstrings and type hints) which can not be resolved.
+nitpicky = True
+nitpick_ignore_regex = [
+    # httpx2 does not publish an intersphinx inventory
+    (r'py:class', r'httpx2\..*'),
+    # type alias of rt.common for JSON data sent to RT, not documented as class
+    (r'py:class', r'JSONInput'),
+]
 
 autodoc_default_options = {
     'member-order': 'alphabetical',

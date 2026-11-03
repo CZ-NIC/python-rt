@@ -132,10 +132,23 @@ Python 3.11 or newer is required.
   # after: the same, or privileged=False for any existing user
   tracker.user_exists('alice', privileged=True)
   ```
+- `create_user()` and `edit_user()` accept the fields of users of RT 5.0 and 6.0: use `NickName` instead of
+  `Nickname` and `FreeformContactInfo` instead of `ContactInfo`, which RT ignored. `EmailEncoding`, `WebEncoding`,
+  `ExternalContactInfoId`, `ContactInfoSystem`, `ExternalAuthId` and `AuthSystem` were removed, as they are no fields
+  of RT 5.0 or newer and RT ignored them; `Timezone` and `SMIMECertificate` were added.
+- `get_ticket_history()` and `get_asset_history()` return the fields `Field`, `OldValue`, `NewValue`, `Data` and
+  `TimeTaken` of each transaction instead of `Description`, which RT always returned empty:
+  ```python
+  # before: item['Description'] was always ''
+  # after, e.g. for a status change
+  print(item['Type'], item['Field'], item['OldValue'], item['NewValue'])  # Status Status new open
+  ```
 - `get_links()` also returns links to URLs (`type` `external`, e.g. created with `edit_link(1, 'RefersTo', url)`),
   which were missing before; filter by `link['type'] == 'ticket'` for the links between tickets only.
 
 ### Changes
+- REST2 field lists (`fields`) are sent without spaces around the field names, e.g. `fields='Name, Description'`
+  requested the unknown field ` Description` before, as RT does not remove them.
 - REST2 `UnexpectedResponseError` for unexpected status codes (e.g. 500) contains the error message of RT, e.g.
   `Received status code 500 instead of 200: Internal Server Error`.
 - REST2 `search()` (and `last_updated()` and `new_correspondence()`, which use it) sends the TicketSQL query in the
@@ -228,6 +241,10 @@ Python 3.11 or newer is required.
 - REST2 `search_assets()` with a condition on `Catalog` in `search_params` returned the assets of all catalogs.
 - REST2 `edit_queue()` and `create_queue()` rejected the fields `SubjectTag`, `CustomFields`, `Cc` and `AdminCc`, which
   RT supports.
+- REST2 `get_rights()` with `user` returned all rights of the object if the user did not exist, as RT ignores the
+  filter then. Only rights of the given user are returned now.
+- REST2 `add_group_member()` raises `NotFoundError` instead of `InvalidUseError` if the member is a group which is not
+  user defined (e.g. a system group), which RT reports as not found, like `add_user_to_group()`.
 - REST2 `create_ticket()` accepts the ID of the queue as well, which RT supports (the type hint only allowed names).
 - REST2 `edit_ticket()` did not detect non-existent users or queues for many names (e.g. queue "Support").
 - REST2 paginated results: no `NotFoundError` anymore for empty results of users who are not allowed to see all results

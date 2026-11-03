@@ -833,3 +833,27 @@ async def test_delete_article(async_rt_connection: AsyncRt):
         await async_rt_connection.delete_article(article_id)
     with pytest.raises(rt.exceptions.NotFoundError):
         await async_rt_connection.delete_article(999999)
+
+
+async def test_rights_of_unknown_user(async_rt_connection: AsyncRt):
+    queue_name, _ = await _create_queue(async_rt_connection)
+    group_id = await _create_group(async_rt_connection)
+    await async_rt_connection.grant_right('queue', queue_name, 'CreateTicket', group=group_id)
+    await async_rt_connection.grant_right('queue', queue_name, 'ShowTicket', user=RT_USER)
+
+    # RT ignores the filter for a user which does not exist and returns all rights
+    assert await _collect(async_rt_connection.get_rights('queue', queue_name, user=f'missing-{random_string()}')) == []
+    # users are identified by name case insensitively, as by RT, and by ID
+    root_id = int((await async_rt_connection.get_user(RT_USER))['id'])
+    for user in (RT_USER, RT_USER.upper(), root_id, str(root_id)):
+        assert [right['Right'] async for right in async_rt_connection.get_rights('queue', queue_name, user=user)] == ['ShowTicket']
+
+
+async def test_add_system_group_as_member(async_rt_connection: AsyncRt):
+    group_id = await _create_group(async_rt_connection)
+    # the system group Privileged, which RT grants rights globally by default
+    principal_ids = {int(item['Group']['id']) async for item in async_rt_connection.get_rights('global') if item.get('Group', {}).get('Name') == 'Privileged'}
+    (principal_id,) = principal_ids
+
+    with pytest.raises(rt.exceptions.NotFoundError, match='not found'):
+        await async_rt_connection.add_group_member(group_id, principal_id)

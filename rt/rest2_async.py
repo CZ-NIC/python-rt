@@ -80,6 +80,10 @@ __authors__ = [
 ]
 
 
+# Fields of the transactions returned by the history methods. RT returns the field Description always empty in
+# collections, as it is no attribute of transactions; Field, OldValue, NewValue and Data describe a change.
+_HISTORY_FIELDS = 'Type,Field,OldValue,NewValue,Data,TimeTaken,Creator,Created,_hyperlinks'
+
 # Names (ref) of the links between tickets in the hyperlinks of a ticket.
 _LINK_REFS = frozenset({'depends-on', 'depended-on-by', 'parent', 'child', 'refers-to', 'referred-to-by'})
 
@@ -765,14 +769,18 @@ class AsyncRt:
         :param content: Optional content of the ticket. Must be specified unless attachments are specified.
         :param content_type: Content-type of the Content parameter; can be either text/plain or text/html.
         :param attachments: Optional list of :py:class:`~rt.common.Attachment` objects
-        :param kwargs: Other arguments possible to set:
-
-                         Requestor, Cc, AdminCc, Owner, Status,
-                         Priority, InitialPriority, FinalPriority,
-                         TimeEstimated, Starts, Due
+        :param kwargs: Other fields to set, e.g. Requestor, Cc, AdminCc, Owner, Status, Priority, InitialPriority,
+                       FinalPriority, TimeEstimated, Starts, Due, CustomFields (e.g. ``{'Severity': 'High'}``),
+                       CustomRoles (e.g. ``{'Manager': 'alice'}``). Roles (Requestor, Cc, AdminCc, Owner and custom roles in CustomRoles)
+                       are set to the given members, replacing the current ones: user names, email addresses (users
+                       which do not exist are created), principal IDs, or groups as ``'group:Name'``. Dates (e.g.
+                       Due, Starts) are interpreted in UTC, e.g. ``'2030-01-31 12:00:00'``.
 
         :returns: ID of new ticket
         :raises InvalidUseError: If the `content_type` is not of a supported format.
+        :raises NotAllowedError: If the user is not allowed to create tickets in the queue, or the queue does not
+                                 exist or is disabled (RT returns status code 403 for all of them).
+        :raises BadRequestError: If RT rejects the request, e.g. for an invalid value.
         """
         if content_type not in VALID_CONTENT_TYPES:
             raise InvalidUseError('Invalid content-type specified.')
@@ -801,7 +809,13 @@ class AsyncRt:
         :param kwargs: Fields to set, e.g. Requestor, Subject, Cc, AdminCc, Owner, Status,
                        Priority, InitialPriority, FinalPriority, TimeEstimated, Starts, Due
                        (according to RT fields). Custom fields can be set as dictionary, e.g.
-                       ``CustomFields={'Severity': 'Low'}``. RT ignores unknown fields.
+                       ``CustomFields={'Severity': 'Low'}``, ``None`` deletes the value. RT ignores unknown fields.
+                       Roles (Requestor, Cc, AdminCc, Owner and custom roles in CustomRoles)
+                       are set to the given members, replacing the current ones: user names, email addresses (users
+                       which do not exist are created), principal IDs, or groups as ``'group:Name'``. Dates (e.g.
+                       Due, Starts) are interpreted in UTC, e.g. ``'2030-01-31 12:00:00'``.
+                       Link names (e.g. ``RefersTo=[1, 2]``) replace all links of that type; use
+                       :py:meth:`edit_link` to add or delete single links.
         :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed),
                   e.g. ``["Ticket 1: Subject changed from 'a' to 'b'"]``. RT reports invalid values only in these
                   messages, e.g. ``"Ticket 1: Status 'x' isn't a valid status for this ticket."``, while the
@@ -823,14 +837,16 @@ class AsyncRt:
         .. note:: Requires RT 5.0.0 or newer.
 
         :param ticket_id: ID of ticket
-        :returns: Iterator of history items ordered increasingly by time of event.
-                  Each history item is a dictionary with the keys Type, Creator,
-                  Created, Description and _hyperlinks.
+        :returns: Iterator of the transactions of the ticket, oldest first, each a dictionary with the keys id, type,
+                  _url, Type (e.g. Create, Correspond, Comment, Status, Set, CustomField), Field (the changed field,
+                  e.g. Owner), OldValue, NewValue, Data (e.g. the subject of a message), TimeTaken, Creator (a
+                  dictionary with id, Name, RealName and EmailAddress), Created and _hyperlinks. Use
+                  :py:meth:`get_ticket_messages` for the text of messages.
         """
         async for transaction in self._paged_request(
             _path('ticket', ticket_id, 'history'),
             params={
-                'fields': 'Type,Creator,Created,Description,_hyperlinks',
+                'fields': _HISTORY_FIELDS,
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
             },
         ):
@@ -842,13 +858,13 @@ class AsyncRt:
         .. note:: Requires RT 5.0.0 or newer.
 
         :param transaction_id: ID of transaction
-        :returns: The transaction as dictionary.
+        :returns: The transaction as dictionary, e.g. with the keys id, Type, Data, Content (text of a message),
+                  ContentType, TimeTaken, Object (the ticket, asset etc.), Creator, Created, CustomFields and
+                  _hyperlinks (also to its attachments), and for changes Field, OldValue and NewValue.
         :raises UnexpectedResponseError: If the response from RT is not as expected,
                                          e.g. if the transaction does not exist (RT returns status code 500).
         """
-        response = await self._send('GET', _path('transaction', transaction_id), params={'fields': 'Description'})
-
-        return self._dict_result(response)
+        return self._dict_result(await self._send('GET', _path('transaction', transaction_id)))
 
     async def search_transactions(
         self,
@@ -1244,8 +1260,8 @@ class AsyncRt:
                   Content-Type, Content-Disposition and for emails From, To, Subject or Message-ID. Which headers
                   exist depends on the mail servers which sent the email, not on RT.
 
-        :raises UnexpectedResponseError: If the response from RT is not as expected.
-        :raises NotFoundError: If attachment with specified ID does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, e.g. if the attachment does not
+                                         exist (RT returns status code 500).
         """
         return self._dict_result(await self._send('GET', _path('attachment', attachment_id)))
 
@@ -1358,37 +1374,26 @@ class AsyncRt:
 
         :param user_id: Identification of user by username (str) or user ID
                         (int)
-        :param kwargs: Other fields to edit from the following list:
+        :param kwargs: Other fields to edit from the following list (the fields of users in RT 5.0 and 6.0):
 
                           * Name
                           * Password
                           * EmailAddress
                           * RealName
-                          * Nickname
+                          * NickName
                           * Gecos
                           * Organization
-                          * Address1
-                          * Address2
-                          * City
-                          * State
-                          * Zip
-                          * Country
-                          * HomePhone
-                          * WorkPhone
-                          * MobilePhone
-                          * PagerPhone
-                          * ContactInfo
+                          * Address1, Address2, City, State, Zip, Country
+                          * HomePhone, WorkPhone, MobilePhone, PagerPhone
+                          * FreeformContactInfo
                           * Comments
                           * Signature
                           * Lang
-                          * EmailEncoding
-                          * WebEncoding
-                          * ExternalContactInfoId
-                          * ContactInfoSystem
-                          * ExternalAuthId
-                          * AuthSystem
+                          * Timezone, e.g. ``'Europe/Berlin'``
+                          * SMIMECertificate
                           * Privileged
                           * Disabled
+                          * CustomFields
 
                        RT (6.0.4) fails with HTTP status 500 (:py:exc:`~rt.exceptions.UnexpectedResponseError`) when
                        changing the Password; it can be set when creating the user.
@@ -1666,7 +1671,8 @@ class AsyncRt:
             raise UnexpectedResponseError(str(msg))
 
         if not msg[0].startswith('Member added'):
-            if msg[0] == "Couldn't find that principal":
+            # RT reports a group which is not user defined (e.g. a system group) as not found
+            if msg[0] == "Couldn't find that principal" or msg[0].endswith('not found'):
                 raise NotFoundError(msg[0])
             raise _refusal_error(msg[0])
 
@@ -1846,8 +1852,8 @@ class AsyncRt:
                           * SortOrder
                           * SubjectTag
                           * CustomFields (custom fields of the queue itself, e.g. ``{'Region': 'EU'}``)
-                          * Cc, AdminCc (watchers of all tickets of the queue, a user name or email address or a list
-                            of them)
+                          * Cc, AdminCc (watchers of all tickets of the queue: user names, email addresses, principal
+                            IDs or groups as ``'group:Name'``, replacing the current watchers)
 
         :returns: List of status messages
         :raises NotFoundError: When queue does not exist
@@ -2331,14 +2337,13 @@ class AsyncRt:
         .. note:: Requires RT 5.0.0 or newer.
 
         :param asset_id: Asset ID.
-        :returns: Iterator of transactions, each a dictionary with the keys
-                  id, type, Type, Creator, Created, Description, _url and _hyperlinks.
-                  Empty if the asset does not exist.
+        :returns: Iterator of transactions, each a dictionary with the same keys as for
+                  :py:meth:`get_ticket_history`. Empty if the asset does not exist.
         """
         async for transaction in self._paged_request(
             _path('asset', asset_id, 'history'),
             params={
-                'fields': 'Type,Creator,Created,Description,_hyperlinks',
+                'fields': _HISTORY_FIELDS,
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
             },
         ):
@@ -2544,14 +2549,14 @@ class AsyncRt:
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param article_id: ID of the article.
-        :returns: Iterator of transactions, each a dictionary with the keys id, type, Type, Creator, Created,
-                  Description, _url and _hyperlinks. Empty if the article does not exist.
+        :returns: Iterator of transactions, each a dictionary with the same keys as for
+                  :py:meth:`get_ticket_history`. Empty if the article does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         async for transaction in self._paged_request(
             _path('article', article_id, 'history'),
             params={
-                'fields': 'Type,Creator,Created,Description,_hyperlinks',
+                'fields': _HISTORY_FIELDS,
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
             },
         ):
@@ -2937,7 +2942,8 @@ class AsyncRt:
                             ``'customfield'``, or ``'global'`` for the rights granted on the whole system.
         :param object_id: Name or ID of the queue, class or catalog, or ID of the group or custom field.
                           Not specified for global rights.
-        :param user: Only return the rights granted to this user, identified by name (str) or ID (int).
+        :param user: Only return the rights granted to this user, identified by name (str) or ID (int). No rights
+                     are returned for a user which does not exist.
         :param group: Only return the rights granted to this group, identified by ID (RT does not support names here,
                       a name matches no rights).
         :returns: Iterator of the granted rights, each a dictionary with the key Right and either User or Group,
@@ -2960,7 +2966,23 @@ class AsyncRt:
             params['group'] = group
 
         async for item in self._paged_request(selector, params=params):
+            # RT ignores the filter for a user which does not exist and returns all rights, so check the user as well
+            if user is not None and not self._is_rights_user(item, user):
+                continue
             yield item
+
+    @staticmethod
+    def _is_rights_user(item: dict[str, typing.Any], user: str | int) -> bool:
+        """Check whether a granted right returned by RT is granted to the given user (by ID or by name)."""
+        principal = item.get('User')
+        if not isinstance(principal, dict):
+            return False
+
+        if isinstance(user, int) or user.isdigit():
+            return str(principal.get('id')) == str(user)
+
+        # RT loads users by name case insensitively
+        return str(principal.get('Name', '')).casefold() == user.casefold()
 
     async def get_available_rights(self, object_type: RightsObjectType, object_id: str | int | None = None) -> dict[str, dict[str, str]]:
         """Get the rights which can be granted on an object or globally, grouped by category.

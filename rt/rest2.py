@@ -420,16 +420,37 @@ class Rt:
         return ActionResult(tuple(messages))
 
     def _done(self, messages: list[str]) -> ActionResult:
-        """Return the result of a change which RT makes completely or not at all, e.g. taking a ticket.
+        """Return the result of an action which RT makes completely or not at all, e.g. taking a ticket.
 
-        RT answers with HTTP status 200 also if it refuses the change, so the messages are checked: an exception is
-        raised for a refusal known to the library, nothing was changed then. Other messages (e.g. of another version
-        or language of RT) are no error, they are listed in :py:attr:`~rt.common.ActionResult.unrecognized`.
+        RT answers with HTTP status 200 also if it refuses the action and the messages are the only information, so all
+        of them must be known to the library: an exception is raised for a refusal, and for a message which is not in the
+        catalog (e.g. of another language of RT or a newer RT), as the action may not have been made.
 
         :param messages: Status messages of RT.
         :raises NotFoundError: If RT reports that an object does not exist.
         :raises NotAllowedError: If RT reports that the permission was denied.
-        :raises InvalidUseError: If RT reports that it refused the change.
+        :raises InvalidUseError: If RT reports that it refused the action.
+        :raises UnexpectedResponseError: If RT answers with a message which is not known to the library.
+        """
+        result = self._confirmed(messages)
+
+        if result.unrecognized:
+            raise UnexpectedResponseError(
+                f'RT answered with a message which is not known to the library, the action may not have been made (is the language of the user English?): {list(result.unrecognized)}'
+            )
+
+        return result
+
+    def _confirmed(self, messages: list[str]) -> ActionResult:
+        """Return the result of an action for which RT tells if it succeeded without the messages (a status, or an HTTP error).
+
+        An exception is raised for a refusal known to the library. Other messages are no error, they are listed in
+        :py:attr:`~rt.common.ActionResult.unrecognized`.
+
+        :param messages: Status messages of RT.
+        :raises NotFoundError: If RT reports that an object does not exist.
+        :raises NotAllowedError: If RT reports that the permission was denied.
+        :raises InvalidUseError: If RT reports that it refused the action.
         """
         result = self._result(messages)
         result.raise_for_refused()
@@ -1532,7 +1553,7 @@ class Rt:
         if not status:
             raise _refusal_error(message)
 
-        return self._done([message])
+        return self._confirmed([message])
 
     def remove_user_from_group(self, user_id: str | int, group_id: str | int) -> None:
         """Remove a user from a group.
@@ -1699,7 +1720,8 @@ class Rt:
         :raises NotFoundError: If the group or the member does not exist.
         :raises InvalidUseError: If RT refused to add the member, e.g. if it is already a member of the group.
         :raises NotAllowedError: If the user is not allowed to change the members of the group.
-        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, or RT answers with a message which is not
+                                         known to the library (e.g. if the language of the user is not English): the action may not have been made.
         """
         msg = self._list_result(self._send('PUT', _path('group', group_id, 'members'), json_data=[principal_id]))
 
@@ -1986,7 +2008,8 @@ class Rt:
                                  e.g. to a deleted ticket or from a ticket to itself, or if RT
                                  could not create or delete the link.
         :raises NotAllowedError: If the user is not allowed to change the links of the ticket.
-        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, or RT answers with a message which is not
+                                         known to the library (e.g. if the language of the user is not English): the action may not have been made.
         """
         return self._edit_link('ticket', ticket_id, link_name, link_value, delete=delete)
 
@@ -2034,7 +2057,8 @@ class Rt:
         :raises InvalidUseError: If the link name is not supported or RT does not allow the link, e.g. from an
                                  asset to itself.
         :raises NotAllowedError: If the user is not allowed to change the asset.
-        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, or RT answers with a message which is not
+                                         known to the library (e.g. if the language of the user is not English): the action may not have been made.
         """
         return self._edit_link('asset', asset_id, link_name, link_value, delete=delete)
 
@@ -2077,7 +2101,8 @@ class Rt:
         :raises NotFoundError: If the ticket to be merged or the destination ticket does not exist.
         :raises InvalidUseError: If RT refused the merge, e.g. of a ticket into itself.
         :raises NotAllowedError: If the user is not allowed to merge the tickets.
-        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, or RT answers with a message which is not
+                                         known to the library (e.g. if the language of the user is not English): the action may not have been made.
         """
         msg = self._list_result(self._send('PUT', _path('ticket', ticket_id), json_data={'MergeInto': into_id}))
 
@@ -2098,7 +2123,8 @@ class Rt:
                   as an exception is raised for a refusal (nothing was changed).
         :raises InvalidUseError: If RT refused to change the owner.
         :raises NotAllowedError: If the user is not allowed to change the owner.
-        :raises UnexpectedResponseError: If the response from RT is not as expected
+        :raises UnexpectedResponseError: If the response from RT is not as expected, or RT answers with a message which is not
+                                         known to the library (e.g. if the language of the user is not English): the action may not have been made.
         """
         msg = self._list_result(self._send('PUT', _path('ticket', ticket_id, action)))
 
@@ -2119,7 +2145,8 @@ class Rt:
         :raises InvalidUseError: If RT refused to change the owner, e.g. if the user already owns the ticket.
         :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises NotFoundError: If the ticket does not exist.
-        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, or RT answers with a message which is not
+                                         known to the library (e.g. if the language of the user is not English): the action may not have been made.
         """
         return self._change_owner(ticket_id, 'take')
 
@@ -2135,7 +2162,8 @@ class Rt:
         :raises InvalidUseError: If RT refused to change the owner, e.g. if the ticket is not owned.
         :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises NotFoundError: If the ticket does not exist.
-        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, or RT answers with a message which is not
+                                         known to the library (e.g. if the language of the user is not English): the action may not have been made.
         """
         return self._change_owner(ticket_id, 'untake')
 
@@ -2151,7 +2179,8 @@ class Rt:
         :raises InvalidUseError: If RT refused to change the owner, e.g. if the ticket is not owned by another user.
         :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises NotFoundError: If the ticket does not exist.
-        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        :raises UnexpectedResponseError: If the response from RT is not as expected, or RT answers with a message which is not
+                                         known to the library (e.g. if the language of the user is not English): the action may not have been made.
         """
         return self._change_owner(ticket_id, 'steal')
 
@@ -2843,7 +2872,7 @@ class Rt:
         if not isinstance(message, str):
             raise UnexpectedResponseError(str(result), status_code=response.status_code, response_message=response.text)
 
-        return self._done([message])
+        return self._confirmed([message])
 
     def unapply_custom_field(self, custom_field_id: str | int, object_id: int) -> None:
         """Remove a custom field from an object it is applied to.

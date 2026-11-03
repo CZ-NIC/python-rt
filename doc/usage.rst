@@ -98,15 +98,23 @@ gives no flag for success or failure. The library classifies the messages with a
   message.
 
 A message which is not in the catalog (a new message of a newer RT, a message in another language, or a message which
-a value of a user makes ambiguous) is neither a success nor a refusal. It **never raises**, as the HTTP status does not
-tell if the request succeeded. It is listed in ``result.unrecognized``, which is empty in the normal case, so code
-which needs to be sure can check it.
+a value of a user makes ambiguous) is neither a success nor a refusal, and the HTTP status does not tell if the request
+succeeded. It is listed in ``result.unrecognized``, which is empty in the normal case. What happens depends on how much
+the method knows:
+
+* ``edit_*()``, ``reply()`` and ``comment()`` never raise for it, as parts of the request were made.
+* ``take()``, ``untake()``, ``steal()``, ``merge_ticket()``, ``edit_link()``, ``edit_asset_link()`` and
+  ``add_group_member()`` raise :py:exc:`~rt.exceptions.UnexpectedResponseError`, as the message is the only information
+  about their result and the action may not have been made. This is not a refusal, so it is not an
+  :py:exc:`~rt.exceptions.InvalidUseError`.
+* ``add_user_to_group()`` and ``apply_custom_field()`` do not raise, as RT tells their result with a status.
 
 .. warning:: **The language of the user of the API must be set to English (``en``) in RT.**
              RT answers with localized messages (language of the user, or of the server). The catalog contains the
-             English messages of RT only. In other languages nothing is recognized: ``refused`` is always empty,
-             ``complete`` is always true and the methods which change one thing do not raise for a refusal; all
-             messages are in ``unrecognized``. Set the language of the user in the preferences of RT
+             English messages of RT only. In other languages nothing is recognized: for ``edit_*()``, ``reply()``
+             and ``comment()`` ``refused`` is always empty, ``complete`` always true and all messages are in
+             ``unrecognized``; ``take()``, ``merge_ticket()`` and the other methods which change one thing always
+             raise :py:exc:`~rt.exceptions.UnexpectedResponseError`, also if they succeeded. Set the language of the user in the preferences of RT
              (*Preferences / Language*), or in the configuration of RT with ``Set($DefaultLanguage, 'en')`` if the
              user has no language set.
              RT also ignores some invalid input without any message: unknown fields and custom fields, and values it

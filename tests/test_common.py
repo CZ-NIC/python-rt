@@ -119,6 +119,8 @@ def test_path_encoding(segments: tuple, expected: str):
         ('Linking to a deleted ticket is not allowed', rt.exceptions.InvalidUseError),
         ('Refused to add link which would create a circular relationship', rt.exceptions.InvalidUseError),
         ("Couldn't resolve 'x' into a link.", rt.exceptions.NotFoundError),
+        ("Couldn't resolve base 'x' into a URI.", rt.exceptions.NotFoundError),
+        ("Couldn't resolve target 'x' into a URI.", rt.exceptions.NotFoundError),
         ('Link could not be created: Permission denied', rt.exceptions.NotAllowedError),
         ('Permission Denied', rt.exceptions.NotAllowedError),
         ('Cannot change Password: Permission Denied', rt.exceptions.NotAllowedError),

@@ -25,6 +25,8 @@ from .conftest import RT_QUEUE, RT_URL, RT_USER
 
 # Exceptions for refused actions; `Case` is (description, function sending the request, expected exception)
 Case = tuple[str, collections.abc.Callable[[], collections.abc.Awaitable[typing.Any]], type[rt.exceptions.RtError]]
+# `Request` is (description, function sending the request)
+Request = tuple[str, collections.abc.Callable[[], collections.abc.Awaitable[typing.Any]]]
 
 
 def _assert_recognized(description: str, message: str, expected: type[rt.exceptions.RtError]) -> None:
@@ -184,11 +186,12 @@ async def test_permission_denied(async_rt_connection: AsyncRt):
         other_id = await async_rt_connection.create_ticket(users.queue, subject='Permissions', content='Test')
 
         # a message with HTTP status 200: the user sees the ticket, but may not change it
-        for description, send in (
+        edits: list[Request] = [
             ('edit a ticket without the right', lambda: users.viewer.edit_ticket(ticket_id, Subject='Changed')),
             ('edit a user without the right', lambda: users.viewer.edit_user(RT_USER, RealName='Changed')),
-        ):
-            result = await send()
+        ]
+        for description, send_edit in edits:
+            result = await send_edit()
             assert result, description
             assert not result.complete, f'{description}: {result.messages!r}'
             _assert_recognized(description, result.refused[0], rt.exceptions.NotAllowedError)
@@ -204,22 +207,23 @@ async def test_permission_denied(async_rt_connection: AsyncRt):
             ('link without the right', lambda: users.viewer.edit_link(ticket_id, 'RefersTo', other_id), rt.exceptions.NotAllowedError),
             ('take without the right', lambda: users.viewer.take(ticket_id), rt.exceptions.InvalidUseError),
         ]
-        for description, send, expected in cases:
+        for description, send_case, expected in cases:
             with pytest.raises(expected) as exc_info:
-                await send()
+                await send_case()
 
             _assert_recognized(description, str(exc_info.value), expected)
 
         # HTTP status 403 for the unprivileged user
-        for description, send in (
+        forbidden: list[Request] = [
             ('get a ticket', lambda: users.unprivileged.get_ticket(ticket_id)),
             ('edit a ticket', lambda: users.unprivileged.edit_ticket(ticket_id, Subject='Changed')),
             ('take a ticket', lambda: users.unprivileged.take(ticket_id)),
             ('merge tickets', lambda: users.unprivileged.merge_ticket(ticket_id, other_id)),
             ('add a group member', lambda: users.unprivileged.add_group_member(1, 1)),
-        ):
+        ]
+        for description, send_forbidden in forbidden:
             with pytest.raises(rt.exceptions.NotAllowedError) as exc_info:
-                await send()
+                await send_forbidden()
             assert exc_info.value.status_code == 403, description
 
         # nothing was changed by the refused requests

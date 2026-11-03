@@ -1895,27 +1895,24 @@ class AsyncRt:
         await self._delete(_path('queue', queue_id))
 
     async def get_links(self, ticket_id: str | int) -> list[dict[str, typing.Any]]:
-        """Gets the ticket links for a single ticket.
+        """Get the links of a ticket.
 
-        Example of a return result:
+        Example of a return result, for a ticket depending on ticket 7 and referring to an asset and a URL:
 
         .. code-block:: json
 
             [
-                {
-                    "id": "13",
-                    "type": "ticket",
-                    "_url": "http://localhost:8080/REST/2.0/ticket/13",
-                    "ref": "depends-on"
-                }
+                {"ref": "depends-on", "type": "ticket", "id": 7, "_url": "http://localhost:8080/REST/2.0/ticket/7"},
+                {"ref": "refers-to", "type": "asset", "id": 3, "_url": "http://localhost:8080/REST/2.0/asset/3"},
+                {"ref": "refers-to", "type": "external", "_url": "https://wiki.example.com/printers"}
             ]
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param ticket_id: ticket ID
         :returns: The links of the ticket, each a dictionary with the keys ref (the kind of link: depends-on,
-                  depended-on-by, parent, child, refers-to or referred-to-by), type (ticket, or external for a link
-                  to a URL), _url and id (the ID of the linked ticket, only for tickets).
+                  depended-on-by, parent, child, refers-to or referred-to-by), type (ticket, asset, or external for a
+                  link to a URL), _url and id (the ID of the linked ticket or asset).
         :raises NotFoundError: If there is no ticket with the specified ticket_id.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
@@ -1931,47 +1928,117 @@ class AsyncRt:
         *,
         delete: bool = False,
     ) -> list[str]:
-        """Creates or deletes a link between the specified tickets.
+        """Add or delete a single link of a ticket, keeping its other links.
 
-        .. note:: Requires RT 5.0.0 or newer.
+        Example::
+
+            >>> tracker.edit_link(1, 'DependsOn', 7)
+            >>> tracker.edit_link(1, 'RefersTo', 'asset:3')
+            >>> tracker.edit_link(1, 'RefersTo', 'https://wiki.example.com/printers')
+            >>> tracker.edit_link(1, 'DependsOn', 7, delete=True)
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 ignores the request, so
+                  :py:exc:`~rt.exceptions.UnexpectedResponseError` is raised.
 
         :param ticket_id: ID of ticket to edit
         :param link_name: Name of link to edit ('Parent', 'Child', 'RefersTo',
                           'ReferredToBy', 'DependsOn', 'DependedOnBy')
-        :param link_value: Either ticket ID or external link.
+        :param link_value: The linked object: the ID of a ticket, an asset as ``'asset:3'``, or a URL.
         :param delete: if True the link is deleted instead of created
-        :returns: Status messages of RT, e.g. ``['Ticket 2 refers to Ticket 1.']``.
-        :raises NotFoundError: If the ticket or the linked ticket does not exist.
+        :returns: Status messages of RT, e.g. ``['Ticket 2 refers to Ticket 1.']``, or ``['Link already exists']``
+                  if the link exists, or ``['Link not found']`` when deleting a link which does not exist.
+        :raises NotFoundError: If the ticket or the linked object does not exist.
         :raises InvalidUseError: If the link name is not supported or RT does not allow the link,
                                  e.g. to a deleted ticket or from a ticket to itself, or if RT
                                  could not create or delete the link.
         :raises NotAllowedError: If the user is not allowed to change the links of the ticket.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        return await self._edit_link('ticket', ticket_id, link_name, link_value, delete=delete)
+
+    async def get_asset_links(self, asset_id: str | int) -> list[dict[str, typing.Any]]:
+        """Get the links of an asset, e.g. to tickets, other assets or URLs.
+
+        .. note:: Requires RT 5.0.0 or newer.
+
+        :param asset_id: Asset ID.
+        :returns: The links of the asset, with the same keys as for :py:meth:`get_links`.
+        :raises NotFoundError: If the asset does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        asset = await self.get_asset(asset_id)
+
+        return [link for link in asset['_hyperlinks'] if link.get('ref') in _LINK_REFS]
+
+    async def edit_asset_link(
+        self,
+        asset_id: str | int,
+        link_name: TicketLinkName,
+        link_value: str | int,
+        *,
+        delete: bool = False,
+    ) -> list[str]:
+        """Add or delete a single link of an asset, keeping its other links.
+
+        Example::
+
+            >>> tracker.edit_asset_link(3, 'RefersTo', 1)  # ticket 1
+            >>> tracker.edit_asset_link(3, 'Parent', 'asset:5')
+            >>> tracker.edit_asset_link(3, 'RefersTo', 'https://example.com/manual.pdf')
+
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 ignores the request, so
+                  :py:exc:`~rt.exceptions.UnexpectedResponseError` is raised.
+
+        :param asset_id: Asset ID.
+        :param link_name: Name of link to edit ('Parent', 'Child', 'RefersTo', 'ReferredToBy', 'DependsOn',
+                          'DependedOnBy').
+        :param link_value: The linked object: the ID of a ticket, an asset as ``'asset:5'``, or a URL.
+        :param delete: Set to True to delete the link instead of creating it.
+        :returns: Status messages of RT, e.g. ``['Asset 3 refers to Ticket 1.']``, see :py:meth:`edit_link`.
+        :raises NotFoundError: If the asset or the linked object does not exist.
+        :raises InvalidUseError: If the link name is not supported or RT does not allow the link, e.g. from an
+                                 asset to itself.
+        :raises NotAllowedError: If the user is not allowed to change the asset.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        return await self._edit_link('asset', asset_id, link_name, link_value, delete=delete)
+
+    async def _edit_link(
+        self,
+        object_type: typing.Literal['ticket', 'asset'],
+        object_id: str | int,
+        link_name: TicketLinkName,
+        link_value: str | int,
+        *,
+        delete: bool,
+    ) -> list[str]:
+        """Add or delete a single link of a ticket or asset, see :py:meth:`edit_link`."""
         if link_name not in VALID_TICKET_LINK_NAMES:
             raise InvalidUseError(f'Unsupported link name. Use one of "{", ".join(VALID_TICKET_LINK_NAMES)}".')
 
-        if delete:
-            json_data = {f'Delete{link_name}': link_value}
-        else:
-            json_data = {f'Add{link_name}': link_value}
+        # Add<link name> and Delete<link name> change single links; the link name alone replaces all links of the type
+        json_data = {f'{"Delete" if delete else "Add"}{link_name}': link_value}
 
-        msg = self._list_result(await self._send('PUT', _path('ticket', ticket_id), json_data=json_data))
+        msg = self._list_result(await self._send('PUT', _path(object_type, object_id), json_data=json_data))
 
-        if msg:
-            if msg[0].startswith("Couldn't resolve"):
-                raise NotFoundError(msg[0])
-            if 'not allowed' in msg[0] or msg[0].startswith(('Link could not be created', 'Link could not be deleted')):
-                raise InvalidUseError(msg[0])
-            if msg[0].endswith('Permission Denied'):
-                raise _refusal_error(msg[0])
+        # RT always reports the result for a link, so an empty result means RT ignored the request (RT 5.0.0)
+        if not msg:
+            raise UnexpectedResponseError('RT did not change the link (links can be changed with RT 5.0.1 or newer).')
+
+        if msg[0].startswith("Couldn't resolve"):
+            raise NotFoundError(msg[0])
+        if 'not allowed' in msg[0] or msg[0].startswith(('Link could not be created', 'Link could not be deleted')):
+            raise InvalidUseError(msg[0])
+        if msg[0].endswith('Permission Denied'):
+            raise _refusal_error(msg[0])
 
         return msg
 
     async def merge_ticket(self, ticket_id: str | int, into_id: str | int) -> list[str]:
         """Merge ticket into another.
 
-        .. note:: Requires RT 5.0.0 or newer.
+        .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 ignores the request, so
+                  :py:exc:`~rt.exceptions.UnexpectedResponseError` is raised.
 
         :param ticket_id: ID of ticket to be merged
         :param into_id: ID of destination ticket
@@ -1983,6 +2050,9 @@ class AsyncRt:
         """
         msg = self._list_result(await self._send('PUT', _path('ticket', ticket_id), json_data={'MergeInto': into_id}))
 
+        if not msg:
+            # RT 5.0.0 ignores MergeInto
+            raise UnexpectedResponseError('RT did not merge the ticket (tickets can be merged with RT 5.0.1 or newer).')
         if len(msg) != 1:
             raise UnexpectedResponseError(str(msg))
 

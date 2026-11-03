@@ -859,3 +859,59 @@ def test_add_system_group_as_member(rt_connection: Rt):
 
     with pytest.raises(rt.exceptions.NotFoundError, match='not found'):
         rt_connection.add_group_member(group_id, principal_id)
+
+
+# --- links of assets -----------------------------------------------------------------------------------------------
+
+
+def test_asset_links(rt_connection: Rt):
+    _, catalog_id = _create_catalog(rt_connection)
+    asset_id = rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
+    other_asset_id = rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
+    ticket_id = rt_connection.create_ticket('General', subject='Asset links', content='Test')
+
+    assert rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id) == [f'Asset {asset_id} refers to Ticket {ticket_id}.']
+    rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}')
+    rt_connection.edit_asset_link(asset_id, 'RefersTo', 'https://example.com/manual.pdf')
+
+    links = sorted((link['ref'], link['type'], link['_url']) for link in rt_connection.get_asset_links(asset_id))
+    assert links == [
+        ('parent', 'asset', f'{RT_URL}asset/{other_asset_id}'),
+        ('refers-to', 'external', 'https://example.com/manual.pdf'),
+        ('refers-to', 'ticket', f'{RT_URL}ticket/{ticket_id}'),
+    ]
+    # the links of the ticket show the asset
+    assert [(link['ref'], link['type'], int(link['id'])) for link in rt_connection.get_links(ticket_id)] == [('referred-to-by', 'asset', asset_id)]
+
+    # adding an existing link and deleting a missing one change nothing
+    assert rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id) == ['Link already exists']
+    rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True)
+    assert rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True) == ['Link not found']
+    assert len(rt_connection.get_asset_links(asset_id)) == 2
+
+
+def test_asset_links_refused(rt_connection: Rt):
+    _, catalog_id = _create_catalog(rt_connection)
+    asset_id = rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
+
+    with pytest.raises(rt.exceptions.NotFoundError, match="Couldn't resolve"):
+        rt_connection.edit_asset_link(asset_id, 'RefersTo', 'asset:999999')
+    with pytest.raises(rt.exceptions.InvalidUseError, match='Link could not be created'):
+        rt_connection.edit_asset_link(asset_id, 'RefersTo', f'asset:{asset_id}')
+    with pytest.raises(rt.exceptions.NotFoundError):
+        rt_connection.edit_asset_link(999999, 'RefersTo', 1)
+    with pytest.raises(rt.exceptions.NotFoundError):
+        rt_connection.get_asset_links(999999)
+    with no_type_checks(), pytest.raises(rt.exceptions.InvalidUseError, match='Unsupported link name'):
+        rt_connection.edit_asset_link(asset_id, 'MergedInto', 1)  # type: ignore[arg-type]
+
+
+def test_links_ignored_by_rt():
+    # RT 5.0.0 ignores links and MergeInto in updates and returns no messages
+    with _mock_client(lambda request: httpx2.Response(200, json=[])) as tracker:
+        with pytest.raises(rt.exceptions.UnexpectedResponseError, match='RT 5.0.1'):
+            tracker.edit_link(1, 'DependsOn', 2)
+        with pytest.raises(rt.exceptions.UnexpectedResponseError, match='RT 5.0.1'):
+            tracker.edit_asset_link(1, 'RefersTo', 2)
+        with pytest.raises(rt.exceptions.UnexpectedResponseError, match='RT 5.0.1'):
+            tracker.merge_ticket(1, 2)

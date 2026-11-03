@@ -149,9 +149,11 @@ these after adding the message and reports refused values only in the returned m
 
     c.reply(ticket_id, 'Fixed, please check.', time_taken=15, status='resolved', custom_fields={'Severity': 'Low'})
 
-Links between tickets, and to URLs::
+Links to other tickets, assets and URLs are added and deleted one at a time, keeping the other links of the ticket
+(RT 5.0.1 or newer)::
 
     c.edit_link(ticket_id, 'DependsOn', 7)
+    c.edit_link(ticket_id, 'RefersTo', 'asset:3')
     c.edit_link(ticket_id, 'RefersTo', 'https://wiki.example.com/printers')
     c.edit_link(ticket_id, 'DependsOn', 7, delete=True)
     for link in c.get_links(ticket_id):
@@ -355,6 +357,13 @@ Assets are created in a catalog, edited, and marked as deleted::
     asset_id = c.create_asset('Laptop 42', 'Laptops', Description='ThinkPad', HeldBy='alice')
     c.edit_asset(asset_id, Status='in-use')
     c.delete_asset(asset_id)
+
+Links of assets are added and deleted like the ones of tickets, e.g. to the ticket of a repair::
+
+    c.edit_asset_link(asset_id, 'RefersTo', ticket_id)
+    c.edit_asset_link(asset_id, 'Parent', 'asset:5')
+    for link in c.get_asset_links(asset_id):
+        print(link['ref'], link['type'], link['_url'])
 
 Assets are searched with conditions, or with an AssetSQL query (RT 5.0.2 or newer), which is passed to RT as is::
 

@@ -22,7 +22,8 @@ Python 3.11 or newer is required.
 - REST2 raises `rt.exceptions.UnexpectedResponseError` instead of `json.JSONDecodeError` for responses which are not
   valid JSON.
 - REST2 raises `rt.exceptions.NotAllowedError` instead of `UnexpectedResponseError` if RT answers with HTTP status 403,
-  i.e. if the user does not have the rights for a request.
+  i.e. if the user does not have the rights for a request, and instead of `BadRequestError` if RT answers with
+  HTTP status 400 and "Permission Denied" (`reply()` and `comment()` without the right to add messages).
 - REST2 raises `rt.exceptions.InvalidUseError` instead of `ValueError` for invalid arguments. `InvalidUseError` is a
   subclass of `ValueError`, so `except ValueError` keeps working.
 
@@ -86,15 +87,23 @@ Python 3.11 or newer is required.
 - The parameter `query_format` of `search()`, `get_ticket()`, `get_asset()`, `get_attachments()` and `search_assets()`
   was renamed to `fields`. A remaining `query_format=` in `search()` is sent to RT as search condition, which RT rejects
   with `BadRequestError: Unknown field: query_format`.
-- Methods changing something return the status messages of RT (`list[str]`) instead of `True`/`False`, and raise an
-  exception if RT refuses the change:
+- All methods changing something return an `ActionResult` instead of a `bool`: `edit_ticket()` and the other `edit_*()`,
+  `reply()`, `comment()`, `take()`, `untake()`, `steal()`, `merge_ticket()`, `edit_link()`, `edit_asset_link()`,
+  `add_user_to_group()`, `add_group_member()` and `apply_custom_field()`. RT answers with HTTP status 200 and status
+  messages also if it refused all or a part of a request (verified with RT 5.0 and 6.0: accepted fields are changed,
+  refused ones are reported only as message). The `ActionResult` is **true whenever RT executed the request**, so
+  `if tracker.comment(...)` keeps working; `result.complete`, `result.refused`, `result.unrecognized` and
+  `result.messages` give the details, and `result.raise_for_refused()` raises `NotFoundError`, `NotAllowedError` or
+  `InvalidUseError` for refused parts. The messages are classified with a catalog of the messages of RT
+  (`rt/_messages.py`); a message which is not in the catalog (newer RT, other language) never raises, it is listed in
+  `result.unrecognized`. Code checking the result with `is True` must be changed.
+  Refused parts of `edit_*()` are not raised anymore (before, only a nonexistent user or queue was).
+  The methods changing one thing raise an exception if RT refuses the change (nothing was changed):
 
   | Method | Before | After |
   |---|---|---|
-  | `edit_ticket()`, `edit_asset()`, `edit_link()` | `True` | status messages (empty list if nothing changed) |
-  | `reply()`, `comment()` | `True` | status messages, e.g. `['Correspondence added']` |
-  | `take()`, `untake()`, `steal()` | `False` if RT refused | status messages; `InvalidUseError` (or `NotAllowedError` for "Permission Denied") if RT refused |
-  | `merge_ticket()` | `False` if RT refused | status messages; `NotFoundError` if the destination ticket does not exist, else `InvalidUseError`/`NotAllowedError` |
+  | `take()`, `untake()`, `steal()` | `False` if RT refused | `InvalidUseError` (or `NotAllowedError` for "Permission Denied") if RT refused |
+  | `merge_ticket()` | `False` if RT refused | `NotFoundError` if the destination ticket does not exist, else `InvalidUseError`/`NotAllowedError` |
   | `edit_link()` | `True` if RT could not create or delete the link | `InvalidUseError`, e.g. for a link from a ticket to itself |
 
   ```python
@@ -105,7 +114,9 @@ Python 3.11 or newer is required.
       tracker.take(ticket_id)
   except rt.exceptions.InvalidUseError: ...
   ```
-  Code testing the result with `if tracker.edit_ticket(...)` must be changed, as an empty list (nothing changed) is false.
+  RT localizes its messages and gives no other indication of success or failure, so the library recognizes the English
+  messages only: **the language of the user of the API must be set to English in RT**, see the usage guide.
+- `rt.common.REGEX_PATTERNS` was removed (not used anymore; the messages of RT are recognized by the library itself).
 - `new_correspondence()` only returns tickets last updated by other users than the one of the connection, as documented
   (before, it returned all tickets).
 - The type aliases `TYPE_VALID_TICKET_LINK_NAMES` and `TYPE_CONTENT_TYPE` were renamed to `TicketLinkName` and `ContentType`.
@@ -212,9 +223,6 @@ Python 3.11 or newer is required.
     the only types these methods ever supported. Files to attach are typed `rt.rest1.FileTuple`.
 - REST2 validates the content of responses (e.g. status messages must be strings, created objects must have an ID)
   and raises `UnexpectedResponseError` instead of failing later with an unrelated error.
-- **Breaking:** REST2 methods changing something return the status messages of RT as `list[str]`: `edit_ticket()`,
-  `edit_asset()`, `edit_link()`, `reply()`, `comment()`, `take()`, `untake()`, `steal()` and `merge_ticket()`
-  (before `bool`; `edit_user()` and `edit_queue()` already returned the messages).
 - **Breaking:** REST2 `take()`, `untake()`, `steal()` and `merge_ticket()` raise an exception if RT refuses the action
   instead of returning `False`: `InvalidUseError` (e.g. "That user already owns that ticket"), `NotAllowedError` for
   "Permission Denied", and `NotFoundError` if the destination ticket of a merge does not exist.
@@ -265,6 +273,7 @@ Python 3.11 or newer is required.
   the connection, as documented (and as implemented in REST1).
 ### Added
 - Add an `http_timeout` parameter to the REST1 `Rt` class.
+- The REST1 `Rt` can be closed with `close()` and used as context manager (`with rt.rest1.Rt(...) as tracker:`), like the REST2 clients.
 - REST2 clients accept an own HTTP client via the new `client` constructor parameter (an `httpx2.Client` for `Rt`,
   an `httpx2.AsyncClient` for `AsyncRt`), e.g. configured with a custom transport, retries, event hooks or HTTP/2.
   It can not be combined with `proxy`, `verify_cert`, `http_auth`, `token` and `http_timeout`, and it is not closed

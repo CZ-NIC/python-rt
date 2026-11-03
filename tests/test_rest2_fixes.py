@@ -124,7 +124,7 @@ def test_custom_field(rt_connection: Rt):
     assert search('__isnot', None) == [ticket_id]
 
     new_value = f"o'brien {random_string()}"
-    assert rt_connection.edit_ticket(ticket_id, CustomFields={RT_CUSTOM_FIELD: new_value}) == [f'{RT_CUSTOM_FIELD} {value} changed to {new_value}']
+    assert (rt_connection.edit_ticket(ticket_id, CustomFields={RT_CUSTOM_FIELD: new_value})).complete
     assert custom_field_values(rt_connection.get_ticket(ticket_id)) == [new_value]
     assert search('', value) == []
     assert search('', new_value) == [ticket_id]
@@ -365,7 +365,7 @@ def test_invalid_link_name():
     ('delete', 'message', 'expected'),
     [
         (False, "Link could not be created: Can't link a ticket to itself", rt.exceptions.InvalidUseError),
-        (True, 'Link could not be deleted: Permission Denied', rt.exceptions.InvalidUseError),
+        (True, 'Link could not be deleted: Permission Denied', rt.exceptions.NotAllowedError),
         (False, 'Permission Denied', rt.exceptions.NotAllowedError),
         (False, 'Permission denied', rt.exceptions.NotAllowedError),
         (True, 'Permission denied', rt.exceptions.NotAllowedError),
@@ -383,17 +383,33 @@ def test_edit_link_failed(delete: bool, message: str, expected: type[rt.exceptio
 # --- error messages of edit operations --------------------------------------------------------------------------
 
 
-def test_edit_ticket_nonexistent_queue_and_owner(rt_connection: Rt):
-    ticket_id = rt_connection.create_ticket(queue=RT_QUEUE, subject=f'Edit test {random_string()}', content='Test')
+def test_edit_ticket_refused_field_changes_other_fields(rt_connection: Rt):
+    ticket_id = rt_connection.create_ticket(queue=RT_QUEUE, subject=f'Refused field {random_string()}', content='Test')
+    new_subject = f'Changed {random_string()}'
 
-    # queue names containing the letters d, o, e or s were not detected before
-    with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_ticket(ticket_id, Queue=f'Support Desk {random_string()}')
+    # RT answers HTTP 200 and reports the refused status only in a message, but still changes the other fields
+    result = rt_connection.edit_ticket(ticket_id, Subject=new_subject, Status='invalid')
+    assert result
+    assert not result.complete
+    assert len(result.refused) == 1
+    assert "isn't a valid status" in result.refused[0]
+    assert any('Subject changed' in message for message in result.messages)
+    with pytest.raises(rt.exceptions.InvalidUseError, match="isn't a valid status"):
+        result.raise_for_refused()
 
-    with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_ticket(ticket_id, Owner=f'nosuchuser{random_string()}')
+    ticket = rt_connection.get_ticket(ticket_id)
+    assert ticket['Subject'] == new_subject
+    assert ticket['Status'] == 'new'
 
-    assert (rt_connection.get_ticket(ticket_id))['Queue']['Name'] == RT_QUEUE
+    # the most specific error is raised if several fields were refused
+    result = rt_connection.edit_ticket(ticket_id, Status='invalid', Owner=f'nosuchuser{random_string()}')
+    with pytest.raises(rt.exceptions.NotFoundError, match=r'(?s)(?=.*valid status)(?=.*does not exist)'):
+        result.raise_for_refused()
+
+    # unknown fields and unknown custom fields are ignored by RT without any message
+    result = rt_connection.edit_ticket(ticket_id, Unknown='x', CustomFields={'Unknown': 'x'})
+    assert result.complete
+    assert result.messages == ()
 
 
 # --- pagination -----------------------------------------------------------------------------------------------
@@ -687,6 +703,54 @@ def test_merge_refused(message: str, expected: type[Exception]):
         _mock_client(handler).merge_ticket(1, 2)
 
 
+@pytest.mark.parametrize('message', ['Ein neuer Text von RT', 'Besitzer geändert von Nobody zu root', 'Something RT has not said before'])
+def test_unrecognized_message_is_no_error(message: str):
+    """RT answers with HTTP status 200 also for refusals, so a message which is not known is no error."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(201 if request.method == 'POST' else 200, json=[message])
+
+    client = _mock_client(handler)
+
+    for action in (
+        lambda: client.take(1),
+        lambda: client.untake(1),
+        lambda: client.steal(1),
+        lambda: client.merge_ticket(1, 2),
+        lambda: client.edit_link(1, 'RefersTo', 2),
+        lambda: client.add_group_member(1, 2),
+        lambda: client.edit_ticket(1, Subject='x'),
+        lambda: client.edit_user('root', RealName='x'),
+        lambda: client.reply(1, 'x'),
+        lambda: client.comment(1, 'x'),
+    ):
+        result = action()
+
+        assert result
+        assert result.complete
+        assert result.refused == ()
+        assert result.unrecognized == (message,)
+        result.raise_for_refused()
+
+
+def test_known_refusal_raises_for_actions_only():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=['That user does not exist'])
+
+    client = _mock_client(handler)
+
+    # nothing was changed by an action, parts of an edit were changed
+    with pytest.raises(rt.exceptions.NotFoundError):
+        client.take(1)
+    with pytest.raises(rt.exceptions.NotFoundError):
+        client.merge_ticket(1, 2)
+
+    result = client.edit_ticket(1, Owner='nobody')
+    assert result
+    assert result.refused == ('That user does not exist',)
+    assert result.unrecognized == ()
+
+
 def test_unexpected_number_of_status_messages():
     messages: list[str] = []
 
@@ -696,7 +760,10 @@ def test_unexpected_number_of_status_messages():
     client = _mock_client(handler)
 
     # RT returns no status message if nothing was changed
-    assert client.edit_ticket(1, Subject='unchanged') == []
+    result = client.edit_ticket(1, Subject='unchanged')
+    assert result
+    assert result.complete
+    assert result.messages == ()
 
     for action in (lambda: client.reply(1, 'x'), lambda: client.comment(1, 'x'), lambda: client.merge_ticket(1, 2), lambda: client.steal(1)):
         with pytest.raises(rt.exceptions.UnexpectedResponseError):
@@ -940,9 +1007,8 @@ def test_edit_queue_fields(rt_connection: Rt):
     field_id = rt_connection.create_custom_field(field_name, 'Freeform', 'RT::Queue', MaxValues=1)
     rt_connection.apply_custom_field(field_id, queue_id)
 
-    messages = rt_connection.edit_queue(queue_id, SubjectTag='other', CustomFields={field_name: 'value'}, AdminCc=RT_USER)
+    assert (rt_connection.edit_queue(queue_id, SubjectTag='other', CustomFields={field_name: 'value'}, AdminCc=RT_USER)).complete
 
-    assert len(messages) == 3
     queue = rt_connection.get_queue(queue_id)
     assert queue['SubjectTag'] == 'other'
     assert [field['values'] for field in queue['CustomFields'] if field['name'] == field_name] == [['value']]
@@ -983,9 +1049,8 @@ def test_user_fields(rt_connection: Rt):
     user_name = f'user-{random_string()}'
     rt_connection.create_user(user_name, f'{user_name}@example.com', NickName='Nick')
 
-    messages = rt_connection.edit_user(user_name, FreeformContactInfo='Room 2', Timezone='Europe/Berlin')
+    assert (rt_connection.edit_user(user_name, FreeformContactInfo='Room 2', Timezone='Europe/Berlin')).complete
 
-    assert len(messages) == 2
     user = rt_connection.get_user(user_name)
     assert (user['NickName'], user['FreeformContactInfo'], user['Timezone']) == ('Nick', 'Room 2', 'Europe/Berlin')
     # the names of fields of RT before 5.0, which RT ignores

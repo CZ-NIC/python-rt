@@ -7,7 +7,8 @@ import re
 import typing
 import urllib.parse
 
-from .exceptions import InvalidUseError, NotAllowedError
+from ._messages import Kind, classify
+from .exceptions import InvalidUseError, NotAllowedError, NotFoundError
 
 __license__ = """ Copyright (C) 2012 CZ.NIC, z.s.p.o.
     Copyright (c) 2015 Genome Research Ltd.
@@ -72,10 +73,6 @@ QueryParams: typing.TypeAlias = collections.abc.Mapping[str, str | int]
 
 # Conditions of a JSON search of REST2, e.g. ``[{'field': 'Name', 'operator': 'LIKE', 'value': 'Support'}]``.
 JSONSearchParams: typing.TypeAlias = collections.abc.Sequence[collections.abc.Mapping[str, JSONInput]]
-
-# Matches the messages RT returns when a referenced user, queue or resource does not exist, e.g.
-# "That user does not exist" or "Ticket 1: Queue Support does not exist".
-REGEX_PATTERNS = {'does_not_exist': re.compile(r'\b(?:user|queue|resource)\b(?: .+)? does not exist$', re.IGNORECASE)}
 
 # Fields which can be set when creating or editing a user.
 _USER_FIELDS = frozenset(
@@ -279,17 +276,123 @@ def _check_fields(fields: collections.abc.Iterable[str], valid_fields: frozenset
         raise InvalidUseError(f'Unsupported names of fields: {", ".join(invalid_fields)}.')
 
 
-def _refusal_error(message: str) -> InvalidUseError | NotAllowedError:
-    """Return the exception for an action which RT refused with the given status message.
+_ERROR_TYPES: dict[Kind, type[NotFoundError | NotAllowedError | InvalidUseError]] = {
+    Kind.NOT_FOUND: NotFoundError,
+    Kind.DENIED: NotAllowedError,
+    Kind.REFUSED: InvalidUseError,
+}
+
+
+def _message_error_type(message: str) -> type[NotFoundError | NotAllowedError | InvalidUseError] | None:
+    """Return the exception type for a status message of RT which reports a refused change.
+
+    :param message: Status message of RT, e.g. "Ticket 1: Queue Support does not exist".
+    :returns: The exception type, or ``None`` if the message is a success or not in the catalog of messages
+              (:py:mod:`rt._messages`), i.e. unrecognized.
+    """
+    kind = classify(message)
+
+    return _ERROR_TYPES.get(kind) if kind else None
+
+
+def _refusal_error(message: str) -> NotFoundError | NotAllowedError | InvalidUseError:
+    """Return the exception for an action which RT refused, e.g. with the status ``0`` of a group member.
 
     :param message: Status message of RT, e.g. "That user already owns that ticket".
-    :returns: :py:exc:`NotAllowedError` if RT denied the permission, else :py:exc:`InvalidUseError`.
+    :returns: :py:exc:`NotAllowedError` if RT denied the permission, :py:exc:`NotFoundError` if an object does not
+              exist, else :py:exc:`InvalidUseError` (also for messages which are not in the catalog).
     """
-    # RT uses both "Permission Denied" and "Permission denied"
-    if message.lower().endswith('permission denied'):
-        return NotAllowedError(message)
+    return (_message_error_type(message) or InvalidUseError)(message)
 
-    return InvalidUseError(message)
+
+def _raise_for_messages(messages: collections.abc.Iterable[str]) -> None:
+    """Raise an exception if one of the status messages of RT reports a refused change.
+
+    Messages which are not in the catalog of messages are not an error.
+    RT changes all fields it accepts and reports the others only as message, so the other changes were made anyway.
+
+    :param messages: Status messages of RT returned for a change.
+    :raises NotFoundError: If an object (e.g. a user or queue) does not exist.
+    :raises NotAllowedError: If the permission was denied.
+    :raises InvalidUseError: If RT refused a value, e.g. an invalid status.
+    """
+    refused = [(error_type, message) for message in messages if (error_type := _message_error_type(message))]
+
+    if refused:
+        # the most specific error first: not found, permission, other
+        error_type = next((t for t in (NotFoundError, NotAllowedError, InvalidUseError) if any(r[0] is t for r in refused)), InvalidUseError)
+        raise error_type('; '.join(message for _, message in refused))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ActionResult:
+    """Result of a change, returned by all methods which change something.
+
+    RT answers a change with HTTP status 200 and status messages, also if it refused all or a part of it. RT changes
+    all fields it accepts and reports the ones it refuses (e.g. an invalid status) only as message. The result is
+    always true, i.e. ``if tracker.comment(...)`` means that the request was executed by RT, like the ``bool`` returned
+    in earlier versions. Methods which change one thing (e.g. ``take()``) raise an exception if RT refuses the change,
+    as nothing was changed; the other methods (e.g. ``edit_ticket()``, ``reply()``) do not, as parts of the change were
+    made. Use :py:attr:`complete`, :py:attr:`refused` or :py:meth:`raise_for_refused` to find out if RT refused a part
+    of the change.
+
+    A message of RT which is not in the catalog of the library is neither a success nor a refusal and never an error,
+    it is listed in :py:attr:`unrecognized`.
+
+    .. note:: The messages of RT are recognized in English only. The language of the user of the API in RT must
+              be set to English (``en``), else refused parts are not detected: :py:attr:`refused` is empty and all
+              messages are :py:attr:`unrecognized`.
+
+    Instances are immutable.
+
+    Example::
+
+        >>> result = tracker.edit_ticket(1, Subject='New', Status='invalid')
+        >>> bool(result)  # RT changed the subject
+        True
+        >>> result.complete
+        False
+        >>> result.refused
+        ("Ticket 1: Status 'invalid' isn't a valid status for this ticket.",)
+        >>> result.raise_for_refused()
+        Traceback (most recent call last):
+        rt.exceptions.InvalidUseError: Ticket 1: Status 'invalid' isn't a valid status for this ticket.
+    """
+
+    messages: tuple[str, ...]
+    """All status messages returned by RT, e.g. ``("Ticket 1: Subject changed from 'a' to 'b'",)``. Empty if nothing was changed."""
+
+    refused: tuple[str, ...] = dataclasses.field(init=False, repr=False, compare=False)
+    """The messages of RT which report a refused part of the change (empty if RT refused nothing)."""
+
+    unrecognized: tuple[str, ...] = dataclasses.field(init=False, repr=False, compare=False)
+    """The messages of RT which are not known to the library (e.g. a new message of a newer RT, or in another language)."""
+
+    def __post_init__(self) -> None:
+        """Classify the messages once, the instance is immutable."""
+        object.__setattr__(self, 'refused', tuple(message for message in self.messages if _message_error_type(message)))
+        object.__setattr__(self, 'unrecognized', tuple(message for message in self.messages if classify(message) is None))
+
+    def __bool__(self) -> bool:
+        """Return ``True``: RT executed the request, also if it refused a part of it."""
+        return True
+
+    @property
+    def complete(self) -> bool:
+        """``True`` if RT did not refuse a part of the change."""
+        return not self.refused
+
+    def raise_for_refused(self) -> None:
+        """Raise an exception if RT refused a part of the change.
+
+        The accepted parts were changed anyway. If several parts were refused, the exception of the most specific
+        kind is raised and its message contains all refused messages.
+
+        :raises NotFoundError: If an object (e.g. a user or queue) does not exist.
+        :raises NotAllowedError: If the permission was denied.
+        :raises InvalidUseError: If RT refused a value, e.g. an invalid status.
+        """
+        _raise_for_messages(self.messages)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

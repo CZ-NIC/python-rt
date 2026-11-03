@@ -155,7 +155,7 @@ def test_ticket_operations(rt_connection: Rt):
     assert ticket2_id > -1
 
     # edit link
-    assert rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id) == [f'Ticket {ticket_id} depends on Ticket {ticket2_id}.']
+    assert (rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id)).complete
 
     # get links
     links1 = rt_connection.get_links(ticket_id)
@@ -173,7 +173,7 @@ def test_ticket_operations(rt_connection: Rt):
     assert found
 
     # delete link
-    assert rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id, delete=True) == [f'Ticket {ticket_id} no longer depends on Ticket {ticket2_id}.']
+    assert (rt_connection.edit_link(ticket_id, 'DependsOn', ticket2_id, delete=True)).complete
     assert not [link for link in rt_connection.get_links(ticket_id) if link['ref'] == 'depends-on']
 
     # link to a ticket which does not exist
@@ -189,15 +189,15 @@ def test_ticket_operations(rt_connection: Rt):
     attachment_name = 'attachment-name.txt'
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
     attachment = Attachment(attachment_name, 'text/plain', attachment_content)
-    assert rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment]) == ['Correspondence added']
+    assert (rt_connection.reply(ticket_id, content=reply_text, attachments=[attachment])).complete
 
     # reply with a comment
     reply_text = 'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert rt_connection.comment(ticket_id, content=reply_text) == ['Comments added']
+    assert (rt_connection.comment(ticket_id, content=reply_text)).complete
 
     # reply with a html content
     reply_text = '<em>Ut enim ad minim veniam</em>, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.'
-    assert rt_connection.reply(ticket_id, content=reply_text, content_type='text/html') == ['Correspondence added']
+    assert (rt_connection.reply(ticket_id, content=reply_text, content_type='text/html')).complete
 
     # attachments list
     at_list = [item for item in rt_connection.get_attachments(ticket_id)]
@@ -211,11 +211,11 @@ def test_ticket_operations(rt_connection: Rt):
 
     # set invalid user
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_ticket(ticket_id, Owner='invalid_user')
+        (rt_connection.edit_ticket(ticket_id, Owner='invalid_user')).raise_for_refused()
 
     # set invalid queue
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_ticket(ticket_id, Queue='invalid_queue')
+        (rt_connection.edit_ticket(ticket_id, Queue='invalid_queue')).raise_for_refused()
 
     # edit invalid ticket
     with pytest.raises(rt.exceptions.NotFoundError):
@@ -226,7 +226,7 @@ def test_ticket_operations(rt_connection: Rt):
         rt_connection.merge_ticket(ticket_id, ticket_id)
     with pytest.raises(rt.exceptions.NotFoundError):
         rt_connection.merge_ticket(ticket2_id, 999999999)
-    assert rt_connection.merge_ticket(ticket2_id, ticket_id) == ['Merge Successful']
+    assert (rt_connection.merge_ticket(ticket2_id, ticket_id)).complete
 
     # delete ticket
     rt_connection.delete_ticket(ticket_id)
@@ -495,8 +495,7 @@ def test_assets(rt_connection: Rt):
     asset_history = [item for item in rt_connection.get_asset_history(asset_id)]
     assert len(asset_history) == 1
 
-    asset_edited = rt_connection.edit_asset(asset_id, Name=asset_name_new)
-    assert asset_edited == [f"Asset {asset_id}: Name changed from '{asset_name}' to '{asset_name_new}'"]
+    assert (rt_connection.edit_asset(asset_id, Name=asset_name_new)).complete
 
     search = rt_connection.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': asset_name_new}])
     items = [item for item in search]

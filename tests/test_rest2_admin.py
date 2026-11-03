@@ -150,9 +150,7 @@ def test_group(rt_connection: Rt):
     found = _collect(rt_connection.search_groups(search_params=[{'field': 'Name', 'value': name}]))
     assert [(int(item['id']), item['Name'], item['Description']) for item in found] == [(group_id, name, 'first')]
 
-    messages = rt_connection.edit_group(group_id, Description='second')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
+    assert (rt_connection.edit_group(group_id, Description='second')).complete
     assert (rt_connection.get_group(group_id))['Description'] == 'second'
 
     with pytest.raises(rt.exceptions.BadRequestError, match='already in use'):
@@ -185,7 +183,7 @@ def test_group_members(rt_connection: Rt):
     user_name, user_id = _create_user(rt_connection)
     _, inner_user_id = _create_user(rt_connection)
 
-    assert rt_connection.add_group_member(group_id, user_id) == [f'Member added: {user_name}']
+    assert (rt_connection.add_group_member(group_id, user_id)).complete
     rt_connection.add_group_member(group_id, inner_group_id)
     rt_connection.add_group_member(inner_group_id, inner_user_id)
 
@@ -251,7 +249,7 @@ def test_user_groups(rt_connection: Rt):
     other_group_id = _create_group(rt_connection)
     user_name, _ = _create_user(rt_connection)
 
-    assert rt_connection.add_user_to_group(user_name, group_id) == [f'Member added: {user_name}']
+    assert (rt_connection.add_user_to_group(user_name, group_id)).complete
     rt_connection.add_user_to_group(user_name, other_group_id)
     assert {int(group['id']) for group in rt_connection.get_user_groups(user_name)} == {group_id, other_group_id}
 
@@ -303,13 +301,14 @@ def test_custom_field(rt_connection: Rt):
     assert cf_id in [int(item['id']) for item in rt_connection.search_custom_fields()]
     assert [int(item['id']) for item in rt_connection.search_custom_fields(object_type='queue', object_id=queue_id)] == [cf_id]
 
-    messages = rt_connection.edit_custom_field(cf_id, Description='edited')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
-    # RT reports invalid values only in the messages
-    messages = rt_connection.edit_custom_field(cf_id, Type='Invalid')
-    assert len(messages) == 1
-    assert 'Illegal value' in messages[0]
+    assert (rt_connection.edit_custom_field(cf_id, Description='edited')).complete
+    # RT reports invalid values only in its messages, the value is not changed
+    result = rt_connection.edit_custom_field(cf_id, Type='Invalid')
+    assert result
+    assert not result.complete
+    with pytest.raises(rt.exceptions.InvalidUseError, match='Illegal value'):
+        result.raise_for_refused()
+    assert (rt_connection.get_custom_field(cf_id))['Type'] == 'Select'
 
 
 def test_custom_field_invalid(rt_connection: Rt):
@@ -363,9 +362,7 @@ def test_custom_field_values(rt_connection: Rt):
     value = rt_connection.get_custom_field_value(cf_id, low_id)
     assert (value['Name'], value['Description']) == ('Low', 'lowest')
 
-    messages = rt_connection.edit_custom_field_value(cf_id, low_id, Description='changed')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
+    assert (rt_connection.edit_custom_field_value(cf_id, low_id, Description='changed')).complete
     assert (rt_connection.get_custom_field_value(cf_id, low_id))['Description'] == 'changed'
 
     rt_connection.delete_custom_field_value(cf_id, low_id)
@@ -390,7 +387,7 @@ def test_apply_custom_field(rt_connection: Rt):
 
     assert applied_to() == [queue_id]
 
-    assert rt_connection.apply_custom_field(cf_id, other_queue_id) == [f'Added custom field {name} to {other_queue_name}.']
+    assert (rt_connection.apply_custom_field(cf_id, other_queue_id)).complete
     assert applied_to() == sorted([queue_id, other_queue_id])
     assert [int(item['id']) for item in rt_connection.search_custom_fields(object_type='queue', object_id=other_queue_id)] == [cf_id]
 
@@ -579,9 +576,7 @@ def test_catalog(rt_connection: Rt):
     all_catalogs = {int(item['id']): item for item in rt_connection.get_all_catalogs()}
     assert all_catalogs[catalog_id]['Name'] == name
 
-    messages = rt_connection.edit_catalog(name, Description='edited')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
+    assert (rt_connection.edit_catalog(name, Description='edited')).complete
     assert (rt_connection.get_catalog(catalog_id))['Description'] == 'edited'
 
 
@@ -750,9 +745,7 @@ def test_class(rt_connection: Rt):
     assert class_id in [int(item['id']) for item in rt_connection.search_classes()]
     assert class_id in [int(item['id']) for item in rt_connection.get_all_classes()]
 
-    messages = rt_connection.edit_class(class_id, Description='edited')
-    assert len(messages) == 1
-    assert 'Description' in messages[0]
+    assert (rt_connection.edit_class(class_id, Description='edited')).complete
 
     with pytest.raises(rt.exceptions.BadRequestError):
         rt_connection.create_class(name)
@@ -791,9 +784,7 @@ def test_article(rt_connection: Rt):
     assert [(int(item['id']), item['Name'], item['Summary'], int(item['Class']['id'])) for item in found] == [(article_id, name, 'summary', class_id)]
     assert article_id in [int(item['id']) for item in rt_connection.search_articles()]
 
-    messages = rt_connection.edit_article(article_id, Summary='changed', CustomFields={'Content': 'New text'})
-    assert len(messages) == 2
-    assert 'Summary' in messages[0]
+    assert (rt_connection.edit_article(article_id, Summary='changed', CustomFields={'Content': 'New text'})).complete
     article = rt_connection.get_article(article_id)
     assert [field['values'] for field in article['CustomFields'] if field['name'] == 'Content'] == [['New text']]
 
@@ -870,7 +861,7 @@ def test_asset_links(rt_connection: Rt):
     other_asset_id = rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
     ticket_id = rt_connection.create_ticket('General', subject='Asset links', content='Test')
 
-    assert rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id) == [f'Asset {asset_id} refers to Ticket {ticket_id}.']
+    assert (rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id)).complete
     rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}')
     rt_connection.edit_asset_link(asset_id, 'RefersTo', 'https://example.com/manual.pdf')
 
@@ -884,9 +875,9 @@ def test_asset_links(rt_connection: Rt):
     assert [(link['ref'], link['type'], int(link['id'])) for link in rt_connection.get_links(ticket_id)] == [('referred-to-by', 'asset', asset_id)]
 
     # adding an existing link and deleting a missing one change nothing
-    assert rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id) == ['Link already exists']
+    assert (rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id)).complete
     rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True)
-    assert rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True) == ['Link not found']
+    assert (rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True)).complete
     assert len(rt_connection.get_asset_links(asset_id)) == 2
 
 

@@ -3,6 +3,7 @@
 # ruff: noqa: S101, SLF001
 
 import builtins
+import dataclasses
 
 import pytest
 
@@ -104,18 +105,110 @@ def test_path_encoding(segments: tuple, expected: str):
 @pytest.mark.parametrize(
     ('message', 'expected'),
     [
-        ('That user does not exist', True),
-        ('Ticket 1: That user does not exist', True),
-        ('Ticket 1: Queue Support does not exist', True),
-        ('Queue Does Not Exist Desk does not exist', True),
-        ('Resource does not exist', True),
-        ("Ticket 1: Subject changed from 'a' to 'user does not exist'", False),
-        ('Ticket 1: Queue changed from General to Support', False),
-        ('Owner changed from Nobody to root', False),
+        # refusals returned by RT 5.0 (verified), by the status of RT, owner, queue, links, merge and groups
+        ("Ticket 1: Status 'bogus' isn't a valid status for this ticket.", rt.exceptions.InvalidUseError),
+        ('Ticket 1: That user does not exist', rt.exceptions.NotFoundError),
+        ('Ticket 1: Queue NoQueue does not exist', rt.exceptions.NotFoundError),
+        # names which contain the letters d, o, e and s, or the words of a message
+        ('Ticket 1: Queue Support Desk does not exist', rt.exceptions.NotFoundError),
+        ('Queue Does Not Exist Desk does not exist', rt.exceptions.NotFoundError),
+        ('Queue q: nonexistent is not a valid lifecycle', rt.exceptions.InvalidUseError),
+        ("New ticket doesn't exist", rt.exceptions.NotFoundError),
+        ("Can't merge a ticket into itself", rt.exceptions.InvalidUseError),
+        ("Can't link a ticket to itself", rt.exceptions.InvalidUseError),
+        ('Linking to a deleted ticket is not allowed', rt.exceptions.InvalidUseError),
+        ('Refused to add link which would create a circular relationship', rt.exceptions.InvalidUseError),
+        ("Couldn't resolve 'x' into a link.", rt.exceptions.NotFoundError),
+        ('Link could not be created: Permission denied', rt.exceptions.NotAllowedError),
+        ('Permission Denied', rt.exceptions.NotAllowedError),
+        ('Cannot change Password: Permission Denied', rt.exceptions.NotAllowedError),
+        ('That user already owns that ticket', rt.exceptions.InvalidUseError),
+        ('You can only steal a ticket owned by someone else', rt.exceptions.InvalidUseError),
+        ('You can only untake tickets you own', rt.exceptions.InvalidUseError),
+        ('You can only take tickets that are unowned', rt.exceptions.InvalidUseError),
+        ('You already own this ticket', rt.exceptions.InvalidUseError),
+        ('That user may not own tickets in that queue', rt.exceptions.InvalidUseError),
+        ("Couldn't find that principal", rt.exceptions.NotFoundError),
+        ('Group already has member: alice', rt.exceptions.InvalidUseError),
+        ('CustomField 1: Illegal value for Type', rt.exceptions.InvalidUseError),
+        ('Ticket 5: Permission Denied', rt.exceptions.NotAllowedError),
+        ("Owner 'x' does not have rights to own this ticket.", rt.exceptions.NotAllowedError),
+        ('Custom field 5 not found', rt.exceptions.NotFoundError),
+        # not a refusal, also if a value set by a user looks like a refusal
+        ("Ticket 1: Subject changed from 'a' to 'Permission Denied'", None),
+        ("Ticket 1: Subject changed from 'Invalid x' to 'could not'", None),
+        ('Owner changed from Nobody to root', None),
+        ('Ticket 1: That is already the current value', None),
+        ('Merge Successful', None),
+        ('Member added: alice', None),
+        ('Custom fields updated', None),
+        ('Added custom field Severity to General.', None),
+        ('Correspondence added', None),
+        ('Link already exists', None),
+        ('Link not found', None),
+        # successful changes whose messages contain values of users which look like refusals
+        ("python-rt Field can't be empty failed added", None),
+        ("Field can't be empty failed changed to does not exist", None),
+        ("can't be empty is no longer a value for custom field Permission Denied", None),
+        ('invalid value added as a value for Field does not exist', None),
+        ("Added can't failed as Cc for this ticket", None),
+        ('Added failed@example.com as Requestor for this ticket', None),
+        ("can't failed is no longer Cc for this ticket", None),
+        ('invalid is no longer AdminCc for this queue', None),
+        ("Member added: can't failed invalid", None),
+        ("Member can't failed deleted", None),
+        ("Membership in can't failed added", None),
+        ("Ticket 1 refers to URI https://example.com/can't-failed-invalid.", None),
+        ('Ticket 1 no longer depends on Ticket 2.', None),
+        ('URI https://example.com/failed referred to by Asset 3.', None),
+        ("Owner changed from can't to failed", None),
+        ("Reference to https://example.com/can't added", None),
+        ("Ticket 1: Subject changed from 'a' to 'Permission Denied'", None),
+        ('', None),
     ],
 )
-def test_does_not_exist_pattern(message: str, expected: bool):
-    assert bool(rt.common.REGEX_PATTERNS['does_not_exist'].search(message)) is expected
+def test_message_error_type(message: str, expected: type[Exception] | None):
+    assert rt.common._message_error_type(message) is expected
+
+
+def test_raise_for_messages():
+    rt.common._raise_for_messages([])
+    rt.common._raise_for_messages(["Ticket 1: Subject changed from 'a' to 'b'"])
+
+    # the most specific error is raised, with all refusals in the message
+    with pytest.raises(rt.exceptions.NotFoundError, match=r'(?s)(?=.*valid status)(?=.*does not exist)'):
+        rt.common._raise_for_messages(["Status 'x' isn't a valid status for this ticket.", "Subject changed from 'a' to 'b'", 'That user does not exist'])
+
+    with pytest.raises(rt.exceptions.NotAllowedError):
+        rt.common._raise_for_messages(['Permission Denied', "Status 'x' isn't a valid status for this ticket."])
+
+
+def test_action_result():
+    complete = rt.common.ActionResult(("Ticket 1: Subject changed from 'a' to 'b'",))
+    assert complete
+    assert complete.complete
+    assert complete.refused == ()
+    complete.raise_for_refused()
+
+    empty = rt.common.ActionResult(())
+    assert empty
+    assert empty.complete
+    empty.raise_for_refused()
+
+
+def test_action_result_partial():
+    refused = "Ticket 1: Status 'x' isn't a valid status for this ticket."
+    result = rt.common.ActionResult(("Ticket 1: Subject changed from 'a' to 'b'", refused))
+
+    # a partial result is true, like a complete one
+    assert result
+    assert not result.complete
+    assert result.refused == (refused,)
+    with pytest.raises(rt.exceptions.InvalidUseError, match="isn't a valid status"):
+        result.raise_for_refused()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.messages = ()  # type: ignore[misc]
 
 
 # --- attachments ------------------------------------------------------------------------------------------------------
@@ -156,6 +249,11 @@ def test_exceptions():
     [
         ('Permission Denied', rt.exceptions.NotAllowedError),
         ('That user already owns that ticket', rt.exceptions.InvalidUseError),
+        ('You can only steal a ticket owned by someone else', rt.exceptions.InvalidUseError),
+        ('You can only untake tickets you own', rt.exceptions.InvalidUseError),
+        ('You can only take tickets that are unowned', rt.exceptions.InvalidUseError),
+        ('You already own this ticket', rt.exceptions.InvalidUseError),
+        ('That user may not own tickets in that queue', rt.exceptions.InvalidUseError),
     ],
 )
 def test_refusal_error(message: str, expected: type[Exception]):
@@ -181,3 +279,14 @@ def test_rest1_connection_error():
 def test_rest1_init_parameters_are_keyword_only():
     with pytest.raises(TypeError):
         rt.rest1.Rt('http://localhost:8080/REST/1.0/')  # type: ignore[call-arg]
+
+
+def test_rest1_close_and_context_manager():
+    tracker = rt.rest1.Rt(url='http://127.0.0.1:1/REST/1.0/', skip_login=True)
+    assert not tracker.session.is_closed
+    tracker.close()
+    assert tracker.session.is_closed
+
+    with rt.rest1.Rt(url='http://127.0.0.1:1/REST/1.0/', skip_login=True) as context_tracker:
+        assert not context_tracker.session.is_closed
+    assert context_tracker.session.is_closed

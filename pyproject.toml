@@ -1,23 +1,29 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "rt"
 description = "Python interface to Request Tracker API"
 readme = "README.rst"
-license = { text = "GNU General Public License v3 (GPLv3)" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [{ name = "Georges Toth", email = "georges.toth@govcert.etat.lu" }]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
-  "Environment :: Console",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
   "Operating System :: POSIX",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
+  "Framework :: AsyncIO",
   "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
 ]
 requires-python = ">= 3.11"
 dependencies = [
@@ -72,7 +78,7 @@ source = "vcs"
 [tool.unasyncd]
 # rt/rest2.py and the sync REST2 tests are generated from the async ones, do not edit them manually.
 # Run `uv run unasyncd` to regenerate them; it exits with 1 if a generated file was out of date.
-files = { "rt/rest2_async.py" = "rt/rest2.py", "tests/test_basic_async.py" = "tests/test_basic.py", "tests/test_tickets_async.py" = "tests/test_tickets.py", "tests/test_rest2_fixes_async.py" = "tests/test_rest2_fixes.py", "tests/test_rest2_admin_async.py" = "tests/test_rest2_admin.py" }
+files = { "rt/rest2_async.py" = "rt/rest2.py", "tests/test_basic_async.py" = "tests/test_basic.py", "tests/test_tickets_async.py" = "tests/test_tickets.py", "tests/test_rest2_fixes_async.py" = "tests/test_rest2_fixes.py", "tests/test_rest2_admin_async.py" = "tests/test_rest2_admin.py", "tests/test_rest2_messages_async.py" = "tests/test_rest2_messages.py" }
 add_replacements = { "AsyncRt" = "Rt", "httpx2.AsyncClient" = "httpx2.Client", "aclose" = "close" }
 add_editors_note = true
 transform_docstrings = true
@@ -96,6 +102,10 @@ cache = false
 "async_rt_connection" = "rt_connection"
 
 [tool.unasyncd.per_file_add_replacements."tests/test_rest2_admin_async.py"]
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
+[tool.unasyncd.per_file_add_replacements."tests/test_rest2_messages_async.py"]
 "rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
 "async_rt_connection" = "rt_connection"
 
@@ -132,6 +142,12 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 testpaths = [
   "tests"
+]
+# The sync tests are generated from the async tests (see [tool.unasyncd]) and only run with `pytest -m sync` or
+# `pytest -m ""` (all tests).
+addopts = "-m 'not sync'"
+markers = [
+  "sync: tests of the sync REST2 client, generated from the async tests (not run by default)",
 ]
 
 [tool.ruff]

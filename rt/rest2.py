@@ -23,11 +23,11 @@ from .common import (
     _QUEUE_FIELDS,
     _REDACTED_HEADERS,
     _USER_FIELDS,
-    REGEX_PATTERNS,
     VALID_CONTENT_TYPES,
     VALID_CUSTOM_FIELD_OBJECT_TYPES,
     VALID_RIGHTS_OBJECT_TYPES,
     VALID_TICKET_LINK_NAMES,
+    ActionResult,
     Attachment,
     ContentType,
     CustomFieldObjectType,
@@ -42,7 +42,9 @@ from .common import (
     _check_fields,
     _CorrespondAction,
     _fields_params,
+    _message_error_type,
     _path,
+    _raise_for_messages,
     _refusal_error,
     _search_fields_params,
 )
@@ -323,7 +325,8 @@ class Rt:
         :param response: Response from HTTP request.
         :raises BadRequestError: If the server returned an HTTP/400 error.
         :raises AuthorizationError: Credentials are invalid or missing.
-        :raises NotAllowedError: The user is not allowed to execute the request (HTTP/403).
+        :raises NotAllowedError: The user is not allowed to execute the request (HTTP/403, or HTTP/400 with the message
+                                 "Permission Denied").
         :raises NotFoundError: Resource was not found.
         :raises ConflictError: The request conflicts with the state of the resource (HTTP/409), e.g. a right is
                                already granted.
@@ -333,7 +336,13 @@ class Rt:
         text = response.text
 
         if status_code == 400:
-            raise BadRequestError(cls._error_message(response, 'Bad request'), status_code=status_code, response_message=text)
+            message = cls._error_message(response, 'Bad request')
+
+            # RT answers with HTTP status 400 if the user may not add a message to a ticket
+            if _message_error_type(message) is NotAllowedError:
+                raise NotAllowedError(message, status_code=status_code, response_message=text)
+
+            raise BadRequestError(message, status_code=status_code, response_message=text)
 
         if status_code == 401:
             raise AuthorizationError(
@@ -403,6 +412,29 @@ class Rt:
             messages.append(message)
 
         return messages
+
+    def _result(self, messages: list[str]) -> ActionResult:
+        """Log the status messages of RT for a change which RT may have applied only partly and return the result."""
+        self.logger.debug('RT status messages: %s', messages)
+
+        return ActionResult(tuple(messages))
+
+    def _done(self, messages: list[str]) -> ActionResult:
+        """Return the result of a change which RT makes completely or not at all, e.g. taking a ticket.
+
+        RT answers with HTTP status 200 also if it refuses the change, so the messages are checked: an exception is
+        raised for a refusal known to the library, nothing was changed then. Other messages (e.g. of another version
+        or language of RT) are no error, they are listed in :py:attr:`~rt.common.ActionResult.unrecognized`.
+
+        :param messages: Status messages of RT.
+        :raises NotFoundError: If RT reports that an object does not exist.
+        :raises NotAllowedError: If RT reports that the permission was denied.
+        :raises InvalidUseError: If RT reports that it refused the change.
+        """
+        result = self._result(messages)
+        result.raise_for_refused()
+
+        return result
 
     @staticmethod
     def _created_id(result: dict[str, JSONValue]) -> str:
@@ -802,7 +834,7 @@ class Rt:
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_ticket(self, ticket_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_ticket(self, ticket_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit ticket values.
 
         .. note:: Requires RT 5.0.0 or newer.
@@ -818,20 +850,16 @@ class Rt:
                        Due, Starts) are interpreted in UTC, e.g. ``'2030-01-31 12:00:00'``.
                        Link names (e.g. ``RefersTo=[1, 2]``) replace all links of that type; use
                        :py:meth:`edit_link` to add or delete single links.
-        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed),
-                  e.g. ``["Ticket 1: Subject changed from 'a' to 'b'"]``. RT reports invalid values only in these
-                  messages, e.g. ``"Ticket 1: Status 'x' isn't a valid status for this ticket."``, while the
-                  other fields are still changed.
-        :raises NotFoundError: If the ticket, or a user or queue set in *kwargs*, does not exist.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
+        :raises NotFoundError: If the ticket does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         msg = self._list_result(self._send('PUT', _path('ticket', ticket_id), json_data=kwargs))
 
-        for message in msg:
-            if REGEX_PATTERNS['does_not_exist'].search(message):
-                raise NotFoundError(message)
-
-        return msg
+        return self._result(msg)
 
     def get_ticket_history(self, ticket_id: str | int) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Get set of short history items.
@@ -1042,7 +1070,7 @@ class Rt:
         custom_fields: collections.abc.Mapping[str, JSONInput] | None = None,
         custom_roles: collections.abc.Mapping[str, JSONInput] | None = None,
         txn_custom_fields: collections.abc.Mapping[str, JSONInput] | None = None,
-    ) -> list[str]:
+    ) -> ActionResult:
         """Sends email message to the contacts in ``Requestors`` field of
         given ticket with subject as is set in ``Subject`` field.
 
@@ -1060,10 +1088,10 @@ class Rt:
         :param custom_roles: Custom roles of the ticket to set, by name, to a user name or email address (a list of
                              them for roles with several members), e.g. ``{'Manager': 'alice'}`` (requires RT 5.0.2).
         :param txn_custom_fields: Custom fields of the transaction of the reply to set, by name or ID.
-        :returns: Status messages of RT, first ``"Correspondence added"``, followed by one for each changed field or role and the
-                  status. RT sets them after adding the reply, so it reports refused values only in these messages,
-                  e.g. ``"Status 'x' isn't a valid status for this ticket."``. RT ignores unknown custom fields and
-                  roles of the ticket.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises BadRequestError: When ticket does not exist
         :raises InvalidUseError: If the `content_type` is not of a supported format.
         :raises UnexpectedResponseError: If the response from RT is not as expected
@@ -1087,7 +1115,7 @@ class Rt:
         if not msg:
             raise UnexpectedResponseError(str(msg))
 
-        return msg
+        return self._result(msg)
 
     def delete_ticket(self, ticket_id: str | int) -> None:
         """Mark a ticket as deleted.
@@ -1114,7 +1142,7 @@ class Rt:
         custom_fields: collections.abc.Mapping[str, JSONInput] | None = None,
         custom_roles: collections.abc.Mapping[str, JSONInput] | None = None,
         txn_custom_fields: collections.abc.Mapping[str, JSONInput] | None = None,
-    ) -> list[str]:
+    ) -> ActionResult:
         """Adds comment to the given ticket.
 
         .. note:: Requires RT 5.0.0 or newer.
@@ -1131,10 +1159,10 @@ class Rt:
         :param custom_roles: Custom roles of the ticket to set, by name, to a user name or email address (a list of
                              them for roles with several members), e.g. ``{'Manager': 'alice'}`` (requires RT 5.0.2).
         :param txn_custom_fields: Custom fields of the transaction of the comment to set, by name or ID.
-        :returns: Status messages of RT, first ``"Comments added"``, followed by one for each changed field or role and the
-                  status. RT sets them after adding the comment, so it reports refused values only in these messages,
-                  e.g. ``"Status 'x' isn't a valid status for this ticket."``. RT ignores unknown custom fields and
-                  roles of the ticket.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises BadRequestError: When ticket does not exist
         :raises InvalidUseError: If the `content_type` is not of a supported format.
         :raises UnexpectedResponseError: If the response from RT is not as expected
@@ -1158,7 +1186,7 @@ class Rt:
         if not msg:
             raise UnexpectedResponseError(str(msg))
 
-        return msg
+        return self._result(msg)
 
     def get_attachments(
         self,
@@ -1369,7 +1397,7 @@ class Rt:
 
         return self._created_id(self._dict_result(response))
 
-    def edit_user(self, user_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_user(self, user_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit user profile.
 
         .. note:: Requires RT 5.0.0 or newer.
@@ -1400,14 +1428,17 @@ class Rt:
                        RT (6.0.4) fails with HTTP status 500 (:py:exc:`~rt.exceptions.UnexpectedResponseError`) when
                        changing the Password; it can be set when creating the user.
 
-        :returns: List of status messages
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises NotFoundError: When the user does not exist
         :raises InvalidUseError: When invalid fields are set
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
         _check_fields(kwargs, _USER_FIELDS)
 
-        return self._list_result(self._send('PUT', _path('user', user_id), json_data=kwargs))
+        return self._result(self._list_result(self._send('PUT', _path('user', user_id), json_data=kwargs)))
 
     def delete_user(self, user_id: str | int) -> None:
         """Disable a user.
@@ -1473,14 +1504,15 @@ class Rt:
         for item in self._paged_request(_path('user', user_id, 'groups')):
             yield item
 
-    def add_user_to_group(self, user_id: str | int, group_id: str | int) -> list[str]:
+    def add_user_to_group(self, user_id: str | int, group_id: str | int) -> ActionResult:
         """Add a user to a group.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param user_id: Identification of the user by name (str) or ID (int).
         :param group_id: ID of the group (RT does not support group names here).
-        :returns: Status messages of RT, e.g. ``['Member added: alice']``.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises NotFoundError: If the user or the group does not exist.
         :raises InvalidUseError: If RT refused to add the user, e.g. if the user is already a member of the group.
         :raises NotAllowedError: If the user is not allowed to change the members of the group.
@@ -1498,11 +1530,9 @@ class Rt:
             raise UnexpectedResponseError(str(result), status_code=response.status_code, response_message=response.text)
 
         if not status:
-            if message.endswith('not found') or message == "Couldn't find that principal":
-                raise NotFoundError(message)
             raise _refusal_error(message)
 
-        return [message]
+        return self._done([message])
 
     def remove_user_from_group(self, user_id: str | int, group_id: str | int) -> None:
         """Remove a user from a group.
@@ -1591,18 +1621,21 @@ class Rt:
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_group(self, group_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_group(self, group_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit a group.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param group_id: ID of the group (RT does not support group names here).
         :param kwargs: Fields to set, e.g. Name, Description, Disabled. RT ignores unknown fields.
-        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises NotFoundError: If the group does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._list_result(self._send('PUT', _path('group', group_id), json_data=kwargs))
+        return self._result(self._list_result(self._send('PUT', _path('group', group_id), json_data=kwargs)))
 
     def delete_group(self, group_id: str | int) -> None:
         """Disable a group.
@@ -1654,14 +1687,15 @@ class Rt:
         for item in self._paged_request(_path('group', group_id, 'members'), params=params):
             yield item
 
-    def add_group_member(self, group_id: str | int, principal_id: str | int) -> list[str]:
+    def add_group_member(self, group_id: str | int, principal_id: str | int) -> ActionResult:
         """Add a user or group as member to a group.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param group_id: ID of the group (RT does not support group names here).
         :param principal_id: ID of the user or group to add (RT does not support names here).
-        :returns: Status messages of RT, e.g. ``['Member added: alice']``.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises NotFoundError: If the group or the member does not exist.
         :raises InvalidUseError: If RT refused to add the member, e.g. if it is already a member of the group.
         :raises NotAllowedError: If the user is not allowed to change the members of the group.
@@ -1672,13 +1706,8 @@ class Rt:
         if len(msg) != 1:
             raise UnexpectedResponseError(str(msg))
 
-        if not msg[0].startswith('Member added'):
-            # RT reports a group which is not user defined (e.g. a system group) as not found
-            if msg[0] == "Couldn't find that principal" or msg[0].endswith('not found'):
-                raise NotFoundError(msg[0])
-            raise _refusal_error(msg[0])
-
-        return msg
+        # RT reports a group which is not user defined (e.g. a system group) as not found
+        return self._done(msg)
 
     def remove_group_member(self, group_id: str | int, principal_id: str | int) -> None:
         """Remove a user or group from the members of a group.
@@ -1836,7 +1865,7 @@ class Rt:
         for item in self._search_objects('queues', search_params, fields, 'Name,Description,Lifecycle,Disabled', include_disabled=include_disabled):
             yield item
 
-    def edit_queue(self, queue_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_queue(self, queue_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit queue.
 
         .. note:: Requires RT 5.0.0 or newer.
@@ -1857,14 +1886,17 @@ class Rt:
                           * Cc, AdminCc (watchers of all tickets of the queue: user names, email addresses, principal
                             IDs or groups as ``'group:Name'``, replacing the current watchers)
 
-        :returns: List of status messages
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises NotFoundError: When queue does not exist
         :raises InvalidUseError: When invalid fields are set
         :raises UnexpectedResponseError: If the response from RT is not as expected
         """
         _check_fields(kwargs, _QUEUE_FIELDS)
 
-        return self._list_result(self._send('PUT', _path('queue', queue_id), json_data=kwargs))
+        return self._result(self._list_result(self._send('PUT', _path('queue', queue_id), json_data=kwargs)))
 
     def create_queue(self, name: str, **kwargs: JSONInput) -> int:
         """Create queue.
@@ -1929,7 +1961,7 @@ class Rt:
         link_value: str | int,
         *,
         delete: bool = False,
-    ) -> list[str]:
+    ) -> ActionResult:
         """Add or delete a single link of a ticket, keeping its other links.
 
         Example::
@@ -1947,8 +1979,8 @@ class Rt:
                           'ReferredToBy', 'DependsOn', 'DependedOnBy')
         :param link_value: The linked object: the ID of a ticket, an asset as ``'asset:3'``, or a URL.
         :param delete: if True the link is deleted instead of created
-        :returns: Status messages of RT, e.g. ``['Ticket 2 refers to Ticket 1.']``, or ``['Link already exists']``
-                  if the link exists, or ``['Link not found']`` when deleting a link which does not exist.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises NotFoundError: If the ticket or the linked object does not exist.
         :raises InvalidUseError: If the link name is not supported or RT does not allow the link,
                                  e.g. to a deleted ticket or from a ticket to itself, or if RT
@@ -1979,7 +2011,7 @@ class Rt:
         link_value: str | int,
         *,
         delete: bool = False,
-    ) -> list[str]:
+    ) -> ActionResult:
         """Add or delete a single link of an asset, keeping its other links.
 
         Example::
@@ -1996,7 +2028,8 @@ class Rt:
                           'DependedOnBy').
         :param link_value: The linked object: the ID of a ticket, an asset as ``'asset:5'``, or a URL.
         :param delete: Set to True to delete the link instead of creating it.
-        :returns: Status messages of RT, e.g. ``['Asset 3 refers to Ticket 1.']``, see :py:meth:`edit_link`.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises NotFoundError: If the asset or the linked object does not exist.
         :raises InvalidUseError: If the link name is not supported or RT does not allow the link, e.g. from an
                                  asset to itself.
@@ -2013,7 +2046,7 @@ class Rt:
         link_value: str | int,
         *,
         delete: bool,
-    ) -> list[str]:
+    ) -> ActionResult:
         """Add or delete a single link of a ticket or asset, see :py:meth:`edit_link`."""
         if link_name not in VALID_TICKET_LINK_NAMES:
             raise InvalidUseError(f'Unsupported link name. Use one of "{", ".join(VALID_TICKET_LINK_NAMES)}".')
@@ -2027,17 +2060,11 @@ class Rt:
         if not msg:
             raise UnexpectedResponseError('RT did not change the link (links can be changed with RT 5.0.1 or newer).')
 
-        if msg[0].startswith("Couldn't resolve"):
-            raise NotFoundError(msg[0])
-        if 'not allowed' in msg[0] or 'circular relationship' in msg[0] or msg[0].startswith(('Link could not be created', 'Link could not be deleted')):
-            raise InvalidUseError(msg[0])
-        # "Permission denied" if StrictLinkACL is enabled and the user may not change the linked object
-        if msg[0].lower().endswith('permission denied'):
-            raise _refusal_error(msg[0])
+        # RT reports a link which exists (or does not exist when deleting) as message, this is not a refusal.
+        # "Permission denied" is returned if StrictLinkACL is enabled and the user may not change the linked object.
+        return self._done(msg)
 
-        return msg
-
-    def merge_ticket(self, ticket_id: str | int, into_id: str | int) -> list[str]:
+    def merge_ticket(self, ticket_id: str | int, into_id: str | int) -> ActionResult:
         """Merge ticket into another.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 ignores the request, so
@@ -2045,7 +2072,8 @@ class Rt:
 
         :param ticket_id: ID of ticket to be merged
         :param into_id: ID of destination ticket
-        :returns: Status messages of RT, i.e. ``['Merge Successful']``.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises NotFoundError: If the ticket to be merged or the destination ticket does not exist.
         :raises InvalidUseError: If RT refused the merge, e.g. of a ticket into itself.
         :raises NotAllowedError: If the user is not allowed to merge the tickets.
@@ -2059,19 +2087,15 @@ class Rt:
         if len(msg) != 1:
             raise UnexpectedResponseError(str(msg))
 
-        if msg[0].lower() != 'merge successful':
-            if msg[0] == "New ticket doesn't exist":
-                raise NotFoundError(msg[0])
-            raise _refusal_error(msg[0])
+        return self._done(msg)
 
-        return msg
-
-    def _change_owner(self, ticket_id: str | int, action: typing.Literal['take', 'untake', 'steal']) -> list[str]:
+    def _change_owner(self, ticket_id: str | int, action: typing.Literal['take', 'untake', 'steal']) -> ActionResult:
         """Take, untake or steal a ticket.
 
         :param ticket_id: ID of ticket
         :param action: The action to execute
-        :returns: Status messages of RT, e.g. ``['Owner changed from Nobody to root']``.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises InvalidUseError: If RT refused to change the owner.
         :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises UnexpectedResponseError: If the response from RT is not as expected
@@ -2081,19 +2105,17 @@ class Rt:
         if len(msg) != 1:
             raise UnexpectedResponseError(str(msg))
 
-        if not msg[0].lower().startswith('owner changed'):
-            raise _refusal_error(msg[0])
+        return self._done(msg)
 
-        return msg
-
-    def take(self, ticket_id: str | int) -> list[str]:
+    def take(self, ticket_id: str | int) -> ActionResult:
         """Take ticket.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param ticket_id: ID of ticket to be taken
-        :returns: Status messages of RT, e.g. ``['Owner changed from Nobody to root']``.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises InvalidUseError: If RT refused to change the owner, e.g. if the user already owns the ticket.
         :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises NotFoundError: If the ticket does not exist.
@@ -2101,14 +2123,15 @@ class Rt:
         """
         return self._change_owner(ticket_id, 'take')
 
-    def untake(self, ticket_id: str | int) -> list[str]:
+    def untake(self, ticket_id: str | int) -> ActionResult:
         """Untake ticket.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param ticket_id: ID of ticket to be untaken
-        :returns: Status messages of RT, e.g. ``['Owner changed from root to Nobody']``.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises InvalidUseError: If RT refused to change the owner, e.g. if the ticket is not owned.
         :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises NotFoundError: If the ticket does not exist.
@@ -2116,14 +2139,15 @@ class Rt:
         """
         return self._change_owner(ticket_id, 'untake')
 
-    def steal(self, ticket_id: str | int) -> list[str]:
+    def steal(self, ticket_id: str | int) -> ActionResult:
         """Steal ticket.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param ticket_id: ID of ticket to be stolen
-        :returns: Status messages of RT, e.g. ``['Owner changed from Nobody to root']``.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises InvalidUseError: If RT refused to change the owner, e.g. if the ticket is not owned by another user.
         :raises NotAllowedError: If the user is not allowed to change the owner.
         :raises NotFoundError: If the ticket does not exist.
@@ -2222,18 +2246,21 @@ class Rt:
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_catalog(self, catalog_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_catalog(self, catalog_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit a catalog.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param catalog_id: Identification of the catalog by name (str) or ID (int).
         :param kwargs: Fields to set, e.g. Name, Description, Lifecycle, Disabled. RT ignores unknown fields.
-        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises NotFoundError: If the catalog does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._list_result(self._send('PUT', _path('catalog', catalog_id), json_data=kwargs))
+        return self._result(self._list_result(self._send('PUT', _path('catalog', catalog_id), json_data=kwargs)))
 
     def delete_catalog(self, catalog_id: str | int) -> None:
         """Disable a catalog.
@@ -2296,18 +2323,21 @@ class Rt:
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_asset(self, asset_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_asset(self, asset_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit an existing asset.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param asset_id: Asset ID.
         :param kwargs: Fields to set, e.g. Name, Description, Status, CustomFields, RefersTo.
-        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises NotFoundError: If the asset does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._list_result(self._send('PUT', _path('asset', asset_id), json_data=kwargs))
+        return self._result(self._list_result(self._send('PUT', _path('asset', asset_id), json_data=kwargs)))
 
     def delete_asset(self, asset_id: str | int) -> None:
         """Mark an asset as deleted by setting its status to ``deleted``.
@@ -2327,9 +2357,7 @@ class Rt:
         msg = self._list_result(self._send('PUT', _path('asset', asset_id), json_data={'Status': 'deleted'}))
 
         # RT returns no message if the asset is already deleted
-        for message in msg:
-            if not message.endswith('Asset deleted'):
-                raise _refusal_error(message)
+        _raise_for_messages(msg)
 
     def search_assets(
         self,
@@ -2494,7 +2522,7 @@ class Rt:
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_class(self, class_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_class(self, class_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit a class of articles.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
@@ -2502,11 +2530,14 @@ class Rt:
 
         :param class_id: Identification of the class by name (str) or ID (int).
         :param kwargs: Fields to set, e.g. Name, Description, SortOrder, Disabled. RT ignores unknown fields.
-        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises NotFoundError: If the class does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._list_result(self._send('PUT', _path('class', class_id), json_data=kwargs))
+        return self._result(self._list_result(self._send('PUT', _path('class', class_id), json_data=kwargs)))
 
     def delete_class(self, class_id: str | int) -> None:
         """Disable a class of articles.
@@ -2587,7 +2618,7 @@ class Rt:
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_article(self, article_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_article(self, article_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit an article.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
@@ -2596,11 +2627,14 @@ class Rt:
         :param article_id: ID of the article.
         :param kwargs: Fields to set, e.g. Name, Summary, SortOrder, or CustomFields, e.g.
                        ``CustomFields={'Content': 'New text'}``. RT ignores unknown fields.
-        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises NotFoundError: If the article does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._list_result(self._send('PUT', _path('article', article_id), json_data=kwargs))
+        return self._result(self._list_result(self._send('PUT', _path('article', article_id), json_data=kwargs)))
 
     def delete_article(self, article_id: str | int) -> None:
         """Delete (disable) an article.
@@ -2737,7 +2771,7 @@ class Rt:
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_custom_field(self, custom_field_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_custom_field(self, custom_field_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit a custom field.
 
         .. note:: Requires RT 5.0.0 or newer.
@@ -2745,13 +2779,14 @@ class Rt:
         :param custom_field_id: ID of the custom field (RT does not support names here).
         :param kwargs: Fields to set, e.g. Name, Description, MaxValues, Pattern, EntryHint, SortOrder, Disabled.
                        RT ignores unknown fields.
-        :returns: Status messages of RT, one for each changed or rejected field (empty if nothing was changed).
-                  RT reports invalid values only in these messages, e.g. ``'CustomField 1: Illegal value for Type'``,
-                  while the other fields are still changed.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises NotFoundError: If the custom field does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._list_result(self._send('PUT', _path('customfield', custom_field_id), json_data=kwargs))
+        return self._result(self._list_result(self._send('PUT', _path('customfield', custom_field_id), json_data=kwargs)))
 
     def delete_custom_field(self, custom_field_id: str | int) -> None:
         """Disable a custom field.
@@ -2782,7 +2817,7 @@ class Rt:
         for item in self._paged_request(_path('customfield', custom_field_id, 'appliesto')):
             yield item
 
-    def apply_custom_field(self, custom_field_id: str | int, object_id: int) -> list[str]:
+    def apply_custom_field(self, custom_field_id: str | int, object_id: int) -> ActionResult:
         """Apply a custom field to an object, e.g. a ticket custom field to a queue.
 
         The type of the object is determined by the lookup type of the custom field, e.g. a queue for a ticket
@@ -2794,7 +2829,8 @@ class Rt:
         :param custom_field_id: ID of the custom field (RT does not support names here).
         :param object_id: ID of the object (RT does not support names here), or 0 to apply the custom field
                           globally, which removes it from all objects it was applied to.
-        :returns: Status messages of RT, e.g. ``['Added custom field Severity to General.']``.
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request. RT refused nothing,
+                  as an exception is raised for a refusal (nothing was changed).
         :raises BadRequestError: If RT rejects the request, e.g. if the object or the custom field does not exist.
         :raises ConflictError: If the custom field is already applied to the object.
         :raises NotAllowedError: If the user is not allowed to apply the custom field.
@@ -2807,7 +2843,7 @@ class Rt:
         if not isinstance(message, str):
             raise UnexpectedResponseError(str(result), status_code=response.status_code, response_message=response.text)
 
-        return [message]
+        return self._done([message])
 
     def unapply_custom_field(self, custom_field_id: str | int, object_id: int) -> None:
         """Remove a custom field from an object it is applied to.
@@ -2874,7 +2910,7 @@ class Rt:
 
         return int(self._created_id(self._dict_result(response)))
 
-    def edit_custom_field_value(self, custom_field_id: str | int, value_id: str | int, **kwargs: JSONInput) -> list[str]:
+    def edit_custom_field_value(self, custom_field_id: str | int, value_id: str | int, **kwargs: JSONInput) -> ActionResult:
         """Edit a value of a custom field.
 
         .. note:: Requires RT 5.0.0 or newer.
@@ -2882,11 +2918,14 @@ class Rt:
         :param custom_field_id: ID of the custom field (RT does not support names here).
         :param value_id: ID of the value.
         :param kwargs: Fields to set, e.g. Name, Description, Category, SortOrder. RT ignores unknown fields.
-        :returns: Status messages of RT, one for each changed field (empty if nothing was changed).
+        :returns: The :py:class:`~rt.common.ActionResult`. It is true if RT executed the request, also if it refused a
+                  part of it (e.g. an invalid status), which RT reports only as message: check
+                  :py:attr:`~rt.common.ActionResult.complete` or call
+                  :py:meth:`~rt.common.ActionResult.raise_for_refused`.
         :raises NotFoundError: If the custom field or the value does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._list_result(self._send('PUT', _path('customfield', custom_field_id, 'value', value_id), json_data=kwargs))
+        return self._result(self._list_result(self._send('PUT', _path('customfield', custom_field_id, 'value', value_id), json_data=kwargs)))
 
     def delete_custom_field_value(self, custom_field_id: str | int, value_id: str | int) -> None:
         """Remove a value from a custom field.

@@ -93,11 +93,11 @@ def test_ticket_take(rt_connection: Rt):
     ticket_id = rt_connection.create_ticket(subject=ticket_subject, content=ticket_text, queue=RT_QUEUE)
     assert ticket_id
 
-    assert rt_connection.take(ticket_id) == [f'Owner changed from Nobody to {RT_USER}']
+    assert (rt_connection.take(ticket_id)).complete
     with pytest.raises(rt.exceptions.InvalidUseError, match='already owns'):
         rt_connection.take(ticket_id)
 
-    assert rt_connection.untake(ticket_id) == [f'Owner changed from {RT_USER} to Nobody']
+    assert (rt_connection.untake(ticket_id)).complete
 
     # RT only steals tickets owned by another user, the ticket is owned by Nobody now
     with pytest.raises(rt.exceptions.InvalidUseError, match='someone else'):
@@ -115,12 +115,8 @@ def test_reply_and_comment_fields(rt_connection: Rt):
     rt_connection.apply_custom_field(txn_field_id, queue_id)
     ticket_id = rt_connection.create_ticket(queue_name, subject='Fields of replies', content='Test')
 
-    messages = rt_connection.reply(ticket_id, 'Reply', subject='Other subject', time_taken=5, status='stalled')
-    assert messages[0] == 'Correspondence added'
-    assert any('stalled' in message for message in messages[1:])
-
-    messages = rt_connection.comment(ticket_id, 'Comment', time_taken=3, txn_custom_fields={txn_field: 'value'})
-    assert messages == ['Comments added', 'Custom fields updated']
+    assert (rt_connection.reply(ticket_id, 'Reply', subject='Other subject', time_taken=5, status='stalled')).complete
+    assert (rt_connection.comment(ticket_id, 'Comment', time_taken=3, txn_custom_fields={txn_field: 'value'})).complete
 
     ticket = rt_connection.get_ticket(ticket_id)
     assert ticket['Status'] == 'stalled'
@@ -132,11 +128,15 @@ def test_reply_and_comment_fields(rt_connection: Rt):
 def test_reply_invalid_status(rt_connection: Rt):
     ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Invalid status', content='Test')
 
-    # RT adds the reply and reports the refused status only in the messages
-    messages = rt_connection.reply(ticket_id, 'Reply', status='invalid')
+    # RT adds the reply and reports the refused status only in a message; the result is true as the reply was added
+    result = rt_connection.reply(ticket_id, 'Reply', status='invalid')
+    assert result
+    assert not result.complete
+    assert "Status 'invalid' isn't a valid status for this ticket." in result.refused
+    assert result.messages[0] == 'Correspondence added'
 
-    assert messages[0] == 'Correspondence added'
-    assert "Status 'invalid' isn't a valid status for this ticket." in messages
+    assert (rt_connection.get_ticket(ticket_id))['Status'] != 'invalid'
+    assert [item['Type'] for item in [i for i in rt_connection.get_ticket_history(ticket_id)]].count('Correspond') == 1
 
 
 @requires_rt_setup
@@ -144,9 +144,7 @@ def test_comment_custom_fields_and_roles(rt_connection: Rt):
     ticket_id = rt_connection.create_ticket(RT_QUEUE, subject='Custom fields of comments', content='Test')
     value = f"it's {random_string()}"
 
-    messages = rt_connection.comment(ticket_id, 'Comment', custom_fields={RT_CUSTOM_FIELD: value}, custom_roles={RT_CUSTOM_ROLE: RT_USER})
-
-    assert messages[0] == 'Comments added'
+    assert (rt_connection.comment(ticket_id, 'Comment', custom_fields={RT_CUSTOM_FIELD: value}, custom_roles={RT_CUSTOM_ROLE: RT_USER})).complete
     ticket = rt_connection.get_ticket(ticket_id)
     assert [field['values'] for field in ticket['CustomFields'] if field['name'] == RT_CUSTOM_FIELD] == [[value]]
     assert ticket['CustomRoles'][RT_CUSTOM_ROLE]['id'] == RT_USER

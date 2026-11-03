@@ -27,6 +27,7 @@ import datetime as dt
 import logging
 import re
 import ssl
+import types
 import typing
 import warnings
 from urllib.parse import urljoin
@@ -193,6 +194,26 @@ class Rt:
             # explicitly with basic or digest authentication (or if this is
             # assured, that we are login in instantly)
             self.login_result = True
+
+    def close(self) -> None:
+        """Close the underlying HTTP client and its connections.
+
+        The instance can not be used anymore afterwards.
+        """
+        self.session.close()
+
+    def __enter__(self) -> typing.Self:
+        """Enter the context manager."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: types.TracebackType | None,
+    ) -> None:
+        """Leave the context manager and close the underlying HTTP client."""
+        self.close()
 
     @typing.overload
     def __request(
@@ -452,8 +473,8 @@ class Rt:
             to check whether given credentials are valid or not.
 
         :keyword login: Username used for RT, if not supplied together with
-                        *password* :py:attr:`~Rt.default_login` and
-                        :py:attr:`~Rt.default_password` are used instead
+                        *password* ``default_login`` and
+                        ``default_password`` are used instead
         :keyword password: Similarly as *login*
 
         :returns: ``True``

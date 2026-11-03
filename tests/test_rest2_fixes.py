@@ -367,6 +367,9 @@ def test_invalid_link_name():
         (False, "Link could not be created: Can't link a ticket to itself", rt.exceptions.InvalidUseError),
         (True, 'Link could not be deleted: Permission Denied', rt.exceptions.InvalidUseError),
         (False, 'Permission Denied', rt.exceptions.NotAllowedError),
+        (False, 'Permission denied', rt.exceptions.NotAllowedError),
+        (True, 'Permission denied', rt.exceptions.NotAllowedError),
+        (False, 'Refused to add link which would create a circular relationship', rt.exceptions.InvalidUseError),
     ],
 )
 def test_edit_link_failed(delete: bool, message: str, expected: type[rt.exceptions.RtError]):

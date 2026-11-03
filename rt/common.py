@@ -285,7 +285,8 @@ def _refusal_error(message: str) -> InvalidUseError | NotAllowedError:
     :param message: Status message of RT, e.g. "That user already owns that ticket".
     :returns: :py:exc:`NotAllowedError` if RT denied the permission, else :py:exc:`InvalidUseError`.
     """
-    if message.endswith('Permission Denied'):
+    # RT uses both "Permission Denied" and "Permission denied"
+    if message.lower().endswith('permission denied'):
         return NotAllowedError(message)
 
     return InvalidUseError(message)

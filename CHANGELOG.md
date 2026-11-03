@@ -258,6 +258,9 @@ Python 3.11 or newer is required.
 - REST2 delete operations treated a non-JSON response other than "204 No Content" (e.g. an HTML page returned by a proxy)
   as success.
 - REST2 `edit_link()` returned `True` if RT could not create or delete the link, e.g. a link from a ticket to itself.
+  `edit_link()` and `edit_asset_link()` also raise `InvalidUseError` if RT refuses a link which would create a circular
+  `DependsOn`/`Parent` relationship, and `NotAllowedError` for "Permission denied" if `$StrictLinkACL` is enabled and
+  the user may not change the linked object.
 - REST2 `new_correspondence()` returned all tickets instead of only those last updated by other users than the one of
   the connection, as documented (and as implemented in REST1).
 ### Added

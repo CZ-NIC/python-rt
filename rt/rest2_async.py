@@ -2027,9 +2027,10 @@ class AsyncRt:
 
         if msg[0].startswith("Couldn't resolve"):
             raise NotFoundError(msg[0])
-        if 'not allowed' in msg[0] or msg[0].startswith(('Link could not be created', 'Link could not be deleted')):
+        if 'not allowed' in msg[0] or 'circular relationship' in msg[0] or msg[0].startswith(('Link could not be created', 'Link could not be deleted')):
             raise InvalidUseError(msg[0])
-        if msg[0].endswith('Permission Denied'):
+        # "Permission denied" if StrictLinkACL is enabled and the user may not change the linked object
+        if msg[0].lower().endswith('permission denied'):
             raise _refusal_error(msg[0])
 
         return msg

@@ -134,8 +134,8 @@ class Rights:
                                  global rights, or not exactly one of user and group is specified.
         :raises BadRequestError: If RT rejects the request, e.g. for an unknown right, user or group.
         :raises ConflictError: If the right is already granted.
-        :raises NotFoundError: If the object does not exist.
-        :raises NotAllowedError: If the user is not allowed to grant rights on the object.
+        :raises NotAllowedError: If the user is not allowed to grant rights on the object, also if the object does not
+                                 exist (RT answers "Permission Denied" then).
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         selector = _path(*self._rights_object(object_type, object_id), 'rights')

@@ -146,7 +146,8 @@ testpaths = [
 ]
 # The sync tests are generated from the async tests (see [tool.unasyncd]) and only run with `pytest -m sync` or
 # `pytest -m ""` (all tests). The tests run in 4 parallel processes (pytest-xdist), use `-n 0` to debug them.
-addopts = "-m 'not sync' -n 4"
+# Tests marked with the same xdist_group run in the same process, i.e. never at the same time.
+addopts = "-m 'not sync' -n 4 --dist loadgroup"
 markers = [
   "sync: tests of the sync REST2 client, generated from the async tests (not run by default)",
   "live: tests which need a running RT (all others, e.g. with mocked responses, run in seconds: pytest -m 'not live')",

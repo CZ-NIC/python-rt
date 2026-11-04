@@ -180,8 +180,8 @@ class CustomFields:
         :param custom_field_id: ID of the custom field (RT does not support names here).
         :param search_params: Conditions of the search as described for :py:meth:`~Assets.search`, e.g.
                               ``[{'field': 'Name', 'value': 'High'}]``. All values if not specified.
-        :returns: Iterator of the values, each a dictionary with the keys id, name, type and _url.
-        :raises NotFoundError: If the custom field does not exist.
+        :returns: Iterator of the values, each a dictionary with the keys id, name, type and _url. Empty if the custom
+                  field does not exist (RT does not report it).
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         for item in self._t.paged_request(_path('customfield', custom_field_id, 'values'), json_data=list(search_params or [])):
@@ -211,8 +211,8 @@ class CustomFields:
         :param name: The value. RT does not require it to be unique.
         :param kwargs: Other fields to set, e.g. Description, Category, SortOrder.
         :returns: ID of the new value.
-        :raises BadRequestError: If RT rejects the request.
-        :raises NotFoundError: If the custom field does not exist.
+        :raises BadRequestError: If RT rejects the request, also if the custom field does not exist ("Couldn't load
+                                 Custom Field #").
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         response = self._t.send('POST', _path('customfield', custom_field_id, 'value'), json_data={'Name': name, **kwargs})
@@ -294,10 +294,10 @@ class CustomFields:
                        dictionary with query parameters as defined by RT. By default Name, Type, Description,
                        LookupType, MaxValues and Disabled.
         :param include_disabled: Set to True to also return disabled custom fields.
-        :returns: Iterator of the found custom fields.
+        :returns: Iterator of the found custom fields. Empty if the queue, catalog or class does not exist (RT does not
+                  report it).
         :raises InvalidUseError: If *object_type* is not supported, or only one of *object_type* and *object_id*
                                  is specified.
-        :raises NotFoundError: If the queue, catalog or class does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         if (object_type is None) != (object_id is None):

@@ -353,6 +353,25 @@ async def test_search_attachments_rights(async_rt_connection: AsyncRt):
         assert [item async for item in tracker.tickets.search_attachments(search_params=condition)] == []
 
 
+async def test_get_attachments_of_ticket_not_found_or_hidden(async_rt_connection: AsyncRt):
+    # RT searches the attachments of all tickets if the ticket does not exist or the user may not see it
+    prefix = f'hidden-{random_string()}'
+    ticket_id = await async_rt_connection.tickets.create(RT_QUEUE, subject='Hidden attachments', content='Test')
+    await async_rt_connection.tickets.comment(ticket_id, 'File', attachments=[Attachment(f'{prefix}.txt', 'text/plain', b'secret')])
+    condition = [{'field': 'Filename', 'value': f'{prefix}.txt'}]
+
+    with pytest.raises(rt.exceptions.NotFoundError):
+        _ = [item async for item in async_rt_connection.tickets.get_attachments(999999999, search_params=condition)]
+    with pytest.raises(rt.exceptions.NotFoundError):
+        _ = [item async for item in async_rt_connection.tickets.get_attachments_ids(999999999, search_params=condition)]
+
+    user_name = f'user-{random_string()}'
+    await async_rt_connection.users.create(user_name, f'{user_name}@example.com', Password='password-of-test-user', Privileged=1)
+    async with AsyncRt(url=RT_URL, http_auth=httpx2.BasicAuth(user_name, 'password-of-test-user'), http_timeout=None) as tracker:
+        with pytest.raises(rt.exceptions.NotAllowedError):
+            _ = [item async for item in tracker.tickets.get_attachments(ticket_id, search_params=condition)]
+
+
 async def test_search_attachments_conditions():
     conditions: list[typing.Any] = []
 

@@ -289,6 +289,8 @@ async def test_add_user_to_group_unexpected_response(result: typing.Any):
 # --- custom fields -------------------------------------------------------------------------------------------------
 
 
+# test_apply_custom_field applies a custom field to all queues for a moment, which test_custom_field would see
+@pytest.mark.xdist_group('global_custom_field')
 async def test_custom_field(async_rt_connection: AsyncRt):
     queue_name, queue_id = await _create_queue(async_rt_connection)
     name = f'cf-{random_string()}'
@@ -378,6 +380,8 @@ async def test_custom_field_values(async_rt_connection: AsyncRt):
         await async_rt_connection.custom_fields.add_value(cf_id, '')
 
 
+# test_apply_custom_field applies a custom field to all queues for a moment, which test_custom_field would see
+@pytest.mark.xdist_group('global_custom_field')
 async def test_apply_custom_field(async_rt_connection: AsyncRt):
     queue_name, queue_id = await _create_queue(async_rt_connection)
     other_queue_name, other_queue_id = await _create_queue(async_rt_connection)

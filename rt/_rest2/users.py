@@ -158,8 +158,8 @@ class Users:
         .. note:: Requires RT 5.0.0 or newer.
 
         :param user_id: Identification of the user by name (str) or ID (int).
-        :returns: Iterator of the groups, each a dictionary with the keys id, type and _url.
-        :raises NotFoundError: If the user does not exist.
+        :returns: Iterator of the groups, each a dictionary with the keys id, type and _url. Empty if the user does not
+                  exist (RT does not report it).
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         for item in self._t.paged_request(_path('user', user_id, 'groups')):
@@ -198,13 +198,13 @@ class Users:
     def remove_from_group(self, user_id: str | int, group_id: str | int) -> None:
         """Remove a user from a group.
 
-        RT also confirms the removal if the user is not a member of the group.
+        RT also confirms the removal if the user is not a member of the group, and if the user or the group does not
+        exist (nothing is changed then).
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param user_id: Identification of the user by name (str) or ID (int).
         :param group_id: ID of the group (RT does not support group names here).
-        :raises NotFoundError: If the user does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         self._t.delete(_path('user', user_id, 'group', group_id))
@@ -212,10 +212,11 @@ class Users:
     def remove_from_all_groups(self, user_id: str | int) -> None:
         """Remove a user from all groups which the user is a direct member of.
 
+        RT also confirms the removal if the user does not exist (nothing is changed then).
+
         .. note:: Requires RT 5.0.0 or newer.
 
         :param user_id: Identification of the user by name (str) or ID (int).
-        :raises NotFoundError: If the user does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         self._t.delete(_path('user', user_id, 'groups'))

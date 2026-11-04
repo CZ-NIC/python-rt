@@ -9,7 +9,7 @@ and state the minimum RT version each method requires.
 
 The methods are grouped by the kind of object they work on, in the attributes of the client: ``c.tickets``,
 ``c.users``, ``c.groups``, ``c.queues``, ``c.assets``, ``c.catalogs``, ``c.articles``, ``c.classes``,
-``c.custom_fields``, ``c.custom_roles`` and ``c.rights``. Only ``c.get_system_info()`` is a method of the client, so
+``c.custom_fields``, ``c.custom_roles`` and ``c.rights``. Only ``c.get_system_info()`` and ``c.close()`` are methods of the client, so
 that ``c.tickets.get(1)`` is the ticket 1 and ``c.users.get('root')`` the user *root*.
 
 Creating a Connection
@@ -80,10 +80,10 @@ RT answers with HTTP status 200 and a list of status messages also if it refused
 gives no flag for success or failure. The library classifies the messages with a catalog of the messages of RT
 (``rt/_messages.py``, derived from the translation file of RT), and an exception is raised only for a refusal it knows:
 
-* Methods which change one thing (``take()``, ``untake()``, ``steal()``, ``tickets.merge()``, ``edit_link()``,
-  ``users.add_to_group()`` etc.) raise an exception if RT refuses, e.g. :py:exc:`~rt.exceptions.InvalidUseError` when
+* Methods which change one thing (``tickets.take()``, ``tickets.untake()``, ``tickets.steal()``, ``tickets.merge()``,
+  ``tickets.edit_link()``, ``users.add_to_group()`` etc.) raise an exception if RT refuses, e.g. :py:exc:`~rt.exceptions.InvalidUseError` when
   taking a ticket which is already owned by the user, as nothing was changed.
-* ``tickets.edit()`` and the other ``edit_*()`` methods, ``reply()`` and ``comment()`` can be applied partly: they
+* The ``edit()`` methods (``tickets.edit()``, ``users.edit()``, ...), ``tickets.reply()`` and ``tickets.comment()`` can be applied partly: they
   change everything RT accepts and report the values it refuses (e.g. an invalid status) only as a message. They do not
   raise, as parts of the request were made. Code which cares can look at the details::
 
@@ -98,7 +98,7 @@ gives no flag for success or failure. The library classifies the messages with a
 
   ``raise_for_refused()`` raises :py:exc:`~rt.exceptions.NotFoundError` (e.g. a user or queue does not exist),
   :py:exc:`~rt.exceptions.NotAllowedError` (permission denied) or :py:exc:`~rt.exceptions.InvalidUseError` (a refused
-  value), the most specific one if several parts were refused. ``reply()`` and ``comment()`` add the message before RT
+  value), the most specific one if several parts were refused. ``tickets.reply()`` and ``tickets.comment()`` add the message before RT
   sets their other values (``status``, ``custom_fields`` and ``custom_roles``), so a refused value never prevents the
   message.
 
@@ -107,8 +107,8 @@ a value of a user makes ambiguous) is neither a success nor a refusal, and the H
 succeeded. It is listed in ``result.unrecognized``, which is empty in the normal case. What happens depends on how much
 the method knows:
 
-* ``edit_*()``, ``reply()`` and ``comment()`` never raise for it, as parts of the request were made.
-* ``take()``, ``untake()``, ``steal()``, ``tickets.merge()``, ``edit_link()``, ``assets.edit_link()`` and
+* The ``edit()`` methods, ``tickets.reply()`` and ``tickets.comment()`` never raise for it, as parts of the request were made.
+* ``tickets.take()``, ``tickets.untake()``, ``tickets.steal()``, ``tickets.merge()``, ``tickets.edit_link()``, ``assets.edit_link()`` and
   ``groups.add_member()`` raise :py:exc:`~rt.exceptions.UnexpectedResponseError`, as the message is the only information
   about their result and the action may not have been made. This is not a refusal, so it is not an
   :py:exc:`~rt.exceptions.InvalidUseError`.
@@ -116,9 +116,9 @@ the method knows:
 
 .. warning:: **The language of the user of the API must be set to English (``en``) in RT.**
              RT answers with localized messages (language of the user, or of the server). The catalog contains the
-             English messages of RT only. In other languages nothing is recognized: for ``edit_*()``, ``reply()``
-             and ``comment()`` ``refused`` is always empty, ``complete`` always true and all messages are in
-             ``unrecognized``; ``take()``, ``tickets.merge()`` and the other methods which change one thing always
+             English messages of RT only. In other languages nothing is recognized: for the ``edit()`` methods,
+             ``tickets.reply()`` and ``tickets.comment()`` ``refused`` is always empty, ``complete`` always true and all
+             messages are in ``unrecognized``; ``tickets.take()``, ``tickets.merge()`` and the other methods which change one thing always
              raise :py:exc:`~rt.exceptions.UnexpectedResponseError`, also if they succeeded. Set the language of the user in the preferences of RT
              (*Preferences / Language*), or in the configuration of RT with ``Set($DefaultLanguage, 'en')`` if the
              user has no language set.
@@ -254,12 +254,12 @@ Files are searched across all tickets, e.g. by name, content type or creation ti
 is allowed to see)::
 
     c.tickets.search_attachments(search_params=[{'field': 'ContentType', 'value': 'application/pdf'},
-                                        {'field': 'Created', 'operator': '>', 'value': '2024-01-01'}])
+                                                {'field': 'Created', 'operator': '>', 'value': '2024-01-01'}])
 
 
 Searching Tickets
 `````````````````
-``search()`` returns an iterator over the matching tickets. Conditions are passed as keyword arguments, which are
+``tickets.search()`` returns an iterator over the matching tickets. Conditions are passed as keyword arguments, which are
 combined with ``AND``::
 
     for ticket in c.tickets.search(queue='General', Status='open', Owner='Nobody'):

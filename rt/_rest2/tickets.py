@@ -335,7 +335,8 @@ class Tickets:
                   _url, Type (e.g. Create, Correspond, Comment, Status, Set, CustomField), Field (the changed field,
                   e.g. Owner), OldValue, NewValue, Data (e.g. the subject of a message), TimeTaken, Creator (a
                   dictionary with id, Name, RealName and EmailAddress), Created and _hyperlinks. Use
-                  :py:meth:`messages` for the text of messages.
+                  :py:meth:`messages` for the text of messages. Empty if the ticket does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         for transaction in self._t.paged_request(
             _path('ticket', ticket_id, 'history'),
@@ -620,9 +621,13 @@ class Tickets:
         :param files_only: Set to False to also return the other parts of messages, e.g. the text of a message
                            (see :py:meth:`search_attachments`).
         :returns: Iterator of attachments belonging to given ticket.
+        :raises NotFoundError: If the ticket does not exist.
+        :raises NotAllowedError: If the user is not allowed to see the ticket.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         get_params = _fields_params(fields, default_fields='Filename,ContentType,ContentLength')
 
+        self._check_ticket(ticket_id)
         for item in self._t.paged_request(
             _path('ticket', ticket_id, 'attachments'),
             json_data=self._attachment_conditions(search_params, files_only=files_only),
@@ -647,7 +652,11 @@ class Tickets:
         :param files_only: Set to False to also return the other parts of messages, see :py:meth:`get_attachments`.
         :returns: Iterator of IDs (type int) of attachments belonging to given
                   ticket.
+        :raises NotFoundError: If the ticket does not exist.
+        :raises NotAllowedError: If the user is not allowed to see the ticket.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._check_ticket(ticket_id)
         for item in self._t.paged_request(
             _path('ticket', ticket_id, 'attachments'),
             json_data=self._attachment_conditions(search_params, files_only=files_only),
@@ -688,7 +697,7 @@ class Tickets:
         Example::
 
             >>> tracker.tickets.search_attachments(search_params=[{'field': 'Filename', 'operator': 'LIKE', 'value': '.pdf'},
-            ...                                           {'field': 'Created', 'operator': '>', 'value': '2024-01-01'}])
+            ...                                                   {'field': 'Created', 'operator': '>', 'value': '2024-01-01'}])
 
         RT stores each message as several attachments: the parts of the email, i.e. a container, the text of the
         message and each file. By default only files (attachments with a file name) are returned. RT only returns
@@ -925,6 +934,17 @@ class Tickets:
         response = self._t.send('POST', _path('ticket', ticket_id, action), json_data=post_data, attachments=attachments)
 
         return self._t.list_result(response)
+
+    def _check_ticket(self, ticket_id: str | int) -> None:
+        """Check that the ticket exists and that the user may see it.
+
+        For ``ticket/<id>/attachments``, RT (6.0.4 at least) searches the attachments of all tickets if the ticket does
+        not exist or the user may not see it, so the attachments of other tickets would be returned.
+
+        :raises NotFoundError: If the ticket does not exist.
+        :raises NotAllowedError: If the user is not allowed to see the ticket.
+        """
+        self._t.send('GET', _path('ticket', ticket_id))
 
     @staticmethod
     def _message_fields(

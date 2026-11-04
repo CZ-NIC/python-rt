@@ -60,21 +60,16 @@ Python 3.11 or newer is required.
   ticket = tracker.tickets.get(1)
   tracker.users.edit('alice', RealName='Alice')
   ```
-  Old name → new name, in the attribute of the client given in the first column (names which stay the same are listed without arrow):
+  The methods of version 3.8, old name → new name, in the attribute of the client given in the first column (names which
+  stay the same are listed without arrow). The methods added in this release are listed under "Added" with their new names:
 
   | Attribute | Methods |
   |---|---|
-  | `tickets` | `new_correspondence()`, `last_updated()`, `get_ticket()` → `get()`, `create_ticket()` → `create()`, `edit_ticket()` → `edit()`, `delete_ticket()` → `delete()`, `search()`, `get_ticket_history()` → `history()`, `get_transaction()`, `search_transactions()`, `get_ticket_messages()` → `messages()`, `reply()`, `comment()`, `get_attachments()`, `get_attachments_ids()`, `get_attachment()`, `search_attachments()`, `get_links()`, `edit_link()`, `merge_ticket()` → `merge()`, `take()`, `untake()`, `steal()` |
-  | `users` | `get_user()` → `get()`, `user_exists()` → `exists()`, `create_user()` → `create()`, `edit_user()` → `edit()`, `delete_user()` → `delete()`, `get_user_groups()` → `get_groups()`, `add_user_to_group()` → `add_to_group()`, `remove_user_from_group()` → `remove_from_group()`, `remove_user_from_all_groups()` → `remove_from_all_groups()`, `search_users()` → `search()` |
-  | `groups` | `get_group()` → `get()`, `create_group()` → `create()`, `edit_group()` → `edit()`, `delete_group()` → `delete()`, `get_group_members()` → `get_members()`, `add_group_member()` → `add_member()`, `remove_group_member()` → `remove_member()`, `remove_all_group_members()` → `remove_all_members()`, `search_groups()` → `search()` |
-  | `queues` | `get_queue()` → `get()`, `get_all_queues()` → `all()`, `edit_queue()` → `edit()`, `create_queue()` → `create()`, `delete_queue()` → `delete()`, `search_queues()` → `search()` |
-  | `assets` | `get_asset()` → `get()`, `create_asset()` → `create()`, `edit_asset()` → `edit()`, `delete_asset()` → `delete()`, `get_asset_history()` → `history()`, `search_assets()` → `search()`, `get_asset_links()` → `get_links()`, `edit_asset_link()` → `edit_link()` |
-  | `catalogs` | `get_catalog()` → `get()`, `get_all_catalogs()` → `all()`, `create_catalog()` → `create()`, `edit_catalog()` → `edit()`, `delete_catalog()` → `delete()`, `search_catalogs()` → `search()` |
-  | `articles` | `get_article()` → `get()`, `create_article()` → `create()`, `edit_article()` → `edit()`, `delete_article()` → `delete()`, `get_article_history()` → `history()`, `search_articles()` → `search()` |
-  | `classes` | `get_all_classes()` → `all()`, `get_class()` → `get()`, `create_class()` → `create()`, `edit_class()` → `edit()`, `delete_class()` → `delete()`, `search_classes()` → `search()` |
-  | `custom_fields` | `get_custom_field()` → `get()`, `create_custom_field()` → `create()`, `edit_custom_field()` → `edit()`, `delete_custom_field()` → `delete()`, `get_custom_field_applies_to()` → `get_applies_to()`, `apply_custom_field()` → `apply()`, `unapply_custom_field()` → `unapply()`, `get_custom_field_values()` → `get_values()`, `get_custom_field_value()` → `get_value()`, `add_custom_field_value()` → `add_value()`, `edit_custom_field_value()` → `edit_value()`, `delete_custom_field_value()` → `delete_value()`, `get_custom_field_file()` → `get_file()`, `search_custom_fields()` → `search()` |
-  | `custom_roles` | `get_custom_role()` → `get()`, `search_custom_roles()` → `search()` |
-  | `rights` | `get_rights()` → `get()`, `get_available_rights()` → `get_available()`, `grant_right()` → `grant()`, `revoke_right()` → `revoke()` |
+  | `tickets` | `new_correspondence()`, `last_updated()`, `get_ticket()` → `get()`, `create_ticket()` → `create()`, `edit_ticket()` → `edit()`, `delete_ticket()` → `delete()`, `search()`, `get_ticket_history()` → `history()`, `get_transaction()`, `reply()`, `comment()`, `get_attachments()`, `get_attachments_ids()`, `get_attachment()`, `get_links()`, `edit_link()`, `merge_ticket()` → `merge()`, `take()`, `untake()`, `steal()` |
+  | `users` | `get_user()` → `get()`, `user_exists()` → `exists()`, `create_user()` → `create()`, `edit_user()` → `edit()`, `delete_user()` → `delete()` |
+  | `queues` | `get_queue()` → `get()`, `get_all_queues()` → `all()`, `edit_queue()` → `edit()`, `create_queue()` → `create()`, `delete_queue()` → `delete()` |
+  | `assets` | `get_asset()` → `get()`, `create_asset()` → `create()`, `edit_asset()` → `edit()`, `get_asset_history()` → `history()`, `search_assets()` → `search()` |
+  | `catalogs` | `get_catalog()` → `get()` |
 - Import `AsyncRt` from `rt.rest2_async` and pass all constructor arguments by keyword (also for `Rt`):
   ```python
   # before
@@ -114,19 +109,29 @@ Python 3.11 or newer is required.
 - The parameter `query_format` of `tickets.search()`, `tickets.get()`, `assets.get()`, `tickets.get_attachments()` and `assets.search()`
   was renamed to `fields`. A remaining `query_format=` in `tickets.search()` is sent to RT as search condition, which RT rejects
   with `BadRequestError: Unknown field: query_format`.
-- All methods changing something return an `ActionResult` instead of a `bool`: `tickets.edit()` and the other `edit_*()`,
-  `tickets.reply()`, `tickets.comment()`, `tickets.take()`, `tickets.untake()`, `tickets.steal()`, `tickets.merge()`, `tickets.edit_link()`, `assets.edit_link()`,
-  `users.add_to_group()`, `groups.add_member()` and `custom_fields.apply()`. RT answers with HTTP status 200 and status
+- All methods changing something return an `ActionResult`. Of the methods of version 3.8, these returned a `bool` before:
+  `tickets.edit()`, `assets.edit()`, `tickets.reply()`, `tickets.comment()`, `tickets.take()`, `tickets.untake()`,
+  `tickets.steal()`, `tickets.merge()` and `tickets.edit_link()`; `users.edit()` and `queues.edit()` returned the list of
+  status messages of RT, which is `result.messages` now (a tuple). RT answers with HTTP status 200 and status
   messages also if it refused all or a part of a request (verified with RT 5.0 and 6.0: accepted fields are changed,
   refused ones are reported only as message). The `ActionResult` is **true whenever RT executed the request**, so
-  `if tracker.tickets.comment(...)` keeps working; `result.complete`, `result.refused`, `result.unrecognized` and
-  `result.messages` give the details, and `result.raise_for_refused()` raises `NotFoundError`, `NotAllowedError` or
-  `InvalidUseError` for refused parts. The messages are classified with a catalog of the messages of RT
-  (`rt/_messages.py`); a message which is not in the catalog (newer RT, other language) is listed in
-  `result.unrecognized` and does not raise for `edit_*()`, `tickets.reply()` and `tickets.comment()`. `tickets.take()`, `tickets.untake()`, `tickets.steal()`,
-  `tickets.merge()`, `tickets.edit_link()`, `assets.edit_link()` and `groups.add_member()` raise `UnexpectedResponseError` for it,
-  as the message is the only information about their result. Code checking the result with `is True` must be changed.
-  Refused parts of `edit_*()` are not raised anymore (before, only a nonexistent user or queue was).
+  `if tracker.tickets.comment(...)` keeps working, but code checking the result with `is True`, or the list of
+  `users.edit()`/`queues.edit()` for being empty (nothing changed), must be changed:
+  ```python
+  # before
+  messages = tracker.edit_user('alice', RealName='Alice')
+  if not messages: ...
+  # after
+  result = tracker.users.edit('alice', RealName='Alice')
+  if not result.messages: ...
+  ```
+  `result.complete`, `result.refused`, `result.unrecognized` and `result.messages` give the details, and
+  `result.raise_for_refused()` raises `NotFoundError`, `NotAllowedError` or `InvalidUseError` for refused parts. The
+  messages are classified with a catalog of the messages of RT (`rt/_messages.py`); a message which is not in the
+  catalog (newer RT, other language) is listed in `result.unrecognized`. It does not raise for the `edit()` methods,
+  `tickets.reply()` and `tickets.comment()`; `tickets.take()`, `tickets.untake()`, `tickets.steal()`, `tickets.merge()` and
+  `tickets.edit_link()` raise `UnexpectedResponseError` for it, as the message is the only information about their result.
+  Refused parts of `tickets.edit()` are not raised anymore (before, only a nonexistent user or queue was).
   The methods changing one thing raise an exception if RT refuses the change (nothing was changed):
 
   | Method | Before | After |
@@ -291,6 +296,9 @@ Python 3.11 or newer is required.
   (RT >= 5.0.5), no more missing results after a page whose items are all hidden from the user, and no more duplicate
   results if items are deleted while iterating.
 - REST2 `assets.search()` modified the `search_params` list passed by the caller.
+- REST2 `tickets.get_attachments()` and `tickets.get_attachments_ids()` returned the attachments of other tickets
+  (all which match the search) if the ticket did not exist or the user was not allowed to see it, as RT then searches
+  the attachments of all tickets. They raise `NotFoundError` or `NotAllowedError` now.
 - REST2 `tickets.last_updated()` accepted invalid dates like 2024-02-30.
 - REST2 delete operations treated a non-JSON response other than "204 No Content" (e.g. an HTML page returned by a proxy)
   as success.

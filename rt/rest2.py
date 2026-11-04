@@ -540,7 +540,7 @@ class Rt:
                 if key[:3] != 'CF_':
                     query.append(f"{key}{op}'{value}'")
                 else:
-                    query.append(f"""CF.{{{key[3:]}}}'{op}'{value}\'""")
+                    query.append(f"""'CF.{{{key[3:]}}}'{op}'{value}\'""")
         else:
             query.append(raw_query)
         get_params['query'] = ' AND '.join('(' + part + ')' for part in query)

@@ -203,6 +203,11 @@ these after adding the message and reports refused values only in the returned m
 
     c.tickets.reply(ticket_id, 'Fixed, please check.', time_taken=15, status='resolved', custom_fields={'Severity': 'Low'})
 
+A message can not be sent to additional recipients only once (Cc or Bcc of a single reply or comment), as REST2 does
+not support it: RT treats a ``Cc`` in the request as the new Cc watchers of the ticket, replacing the current ones,
+and ignores a ``Bcc``. ``c.tickets.edit(ticket_id, Cc=[...])`` sets the Cc watchers of the ticket (also replacing them);
+the REST1 ``reply()`` and ``comment()`` accept ``cc`` and ``bcc`` for a single message.
+
 Links to other tickets, assets and URLs are added and deleted one at a time, keeping the other links of the ticket
 (RT 5.0.1 or newer)::
 

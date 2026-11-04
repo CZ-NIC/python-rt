@@ -223,9 +223,9 @@ class Tickets:
 
         Example::
 
-            >>> tracker.tickets.tickets.search(CF_Domain='example.com', Subject__like='warning')
-            >>> tracker.tickets.tickets.search(conditions={'CF_Contact Email': 'a@example.com', 'Status': 'open'})
-            >>> tracker.tickets.tickets.search(queue='General', order='Status', raw_query="id = 1 OR id = 2 OR id = 3")
+            >>> tracker.tickets.search(CF_Domain='example.com', Subject__like='warning')
+            >>> tracker.tickets.search(conditions={'CF_Contact Email': 'a@example.com', 'Status': 'open'})
+            >>> tracker.tickets.search(queue='General', order='Status', raw_query="id = 1 OR id = 2 OR id = 3")
 
         The query is sent in the body of a POST request, so it is not limited by the maximum length of URLs and does
         not appear in the access logs of RT or of proxies in front of it.
@@ -346,19 +346,21 @@ class Tickets:
         ):
             yield transaction
 
-    def get_transaction(self, transaction_id: str | int) -> dict[str, typing.Any]:
+    def get_transaction(self, transaction_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get a transaction.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param transaction_id: ID of transaction
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the transaction itself.
         :returns: The transaction as dictionary, e.g. with the keys id, Type, Data, Content (text of a message),
                   ContentType, TimeTaken, Object (the ticket, asset etc.), Creator, Created, CustomFields and
                   _hyperlinks (also to its attachments), and for changes Field, OldValue and NewValue.
         :raises UnexpectedResponseError: If the response from RT is not as expected,
                                          e.g. if the transaction does not exist (RT returns status code 500).
         """
-        return self._t.dict_result(self._t.send('GET', _path('transaction', transaction_id)))
+        return self._t.dict_result(self._t.send('GET', _path('transaction', transaction_id), params=fields))
 
     def search_transactions(
         self,
@@ -372,8 +374,8 @@ class Tickets:
 
         Example::
 
-            >>> tracker.tickets.tickets.search_transactions(search_params=[{'field': 'ObjectId', 'value': 1}, {'field': 'Type', 'value': 'Comment'}])
-            >>> tracker.tickets.tickets.search_transactions(raw_query="Type = 'Correspond' AND Created > '2024-01-01'", fields=['Type', 'Content'])
+            >>> tracker.tickets.search_transactions(search_params=[{'field': 'ObjectId', 'value': 1}, {'field': 'Type', 'value': 'Comment'}])
+            >>> tracker.tickets.search_transactions(raw_query="Type = 'Correspond' AND Created > '2024-01-01'", fields=['Type', 'Content'])
 
         Conditions on different fields are combined with AND, several conditions on the same field with OR (see the
         REST2 documentation of RT on JSON searches). The query is sent in the body of a POST request like the one of
@@ -473,6 +475,10 @@ class Tickets:
 
         .. note:: Requires RT 5.0.0 or newer.
 
+        There is no one-off Cc or Bcc for a single message, as REST2 does not support it: a ``Cc`` sent to RT would
+        replace the Cc watchers of the ticket. Add watchers with :py:meth:`edit` (which replaces them too) or use
+        the ``cc``/``bcc`` of the REST1 :py:meth:`rt.rest1.Rt.reply`.
+
         :param ticket_id: ID of ticket to which message belongs
         :param content: Content of email message (text/plain or text/html)
         :param content_type: Content type of email message, default to text/plain
@@ -531,6 +537,10 @@ class Tickets:
         """Adds comment to the given ticket.
 
         .. note:: Requires RT 5.0.0 or newer.
+
+        There is no one-off Cc or Bcc for a single message, as REST2 does not support it: a ``Cc`` sent to RT would
+        replace the Cc watchers of the ticket. Add watchers with :py:meth:`edit` (which replaces them too) or use
+        the ``cc``/``bcc`` of the REST1 :py:meth:`rt.rest1.Rt.comment`.
 
         :param ticket_id: ID of ticket to which comment belongs
         :param content: Content of comment
@@ -647,12 +657,14 @@ class Tickets:
                 raise UnexpectedResponseError(f'Attachment without ID: {item}')
             yield int(attachment_id)
 
-    def get_attachment(self, attachment_id: str | int) -> dict[str, typing.Any]:
+    def get_attachment(self, attachment_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get attachment.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param attachment_id: ID of attachment to fetch
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the attachment itself.
         :returns: Attachment as dictionary with the keys id, TransactionId, Parent, ContentType, Filename, Subject,
                   MessageId, Creator, Created, Headers, _hyperlinks and Content (base64 encoded string).
                   'Headers' holds the headers of the attachment as string (one header per line), e.g.
@@ -662,7 +674,7 @@ class Tickets:
         :raises UnexpectedResponseError: If the response from RT is not as expected, e.g. if the attachment does not
                                          exist (RT returns status code 500).
         """
-        return self._t.dict_result(self._t.send('GET', _path('attachment', attachment_id)))
+        return self._t.dict_result(self._t.send('GET', _path('attachment', attachment_id), params=fields))
 
     def search_attachments(
         self,
@@ -675,7 +687,7 @@ class Tickets:
 
         Example::
 
-            >>> tracker.tickets.tickets.search_attachments(search_params=[{'field': 'Filename', 'operator': 'LIKE', 'value': '.pdf'},
+            >>> tracker.tickets.search_attachments(search_params=[{'field': 'Filename', 'operator': 'LIKE', 'value': '.pdf'},
             ...                                           {'field': 'Created', 'operator': '>', 'value': '2024-01-01'}])
 
         RT stores each message as several attachments: the parts of the email, i.e. a container, the text of the
@@ -740,10 +752,10 @@ class Tickets:
 
         Example::
 
-            >>> tracker.tickets.tickets.edit_link(1, 'DependsOn', 7)
-            >>> tracker.tickets.tickets.edit_link(1, 'RefersTo', 'asset:3')
-            >>> tracker.tickets.tickets.edit_link(1, 'RefersTo', 'https://wiki.example.com/printers')
-            >>> tracker.tickets.tickets.edit_link(1, 'DependsOn', 7, delete=True)
+            >>> tracker.tickets.edit_link(1, 'DependsOn', 7)
+            >>> tracker.tickets.edit_link(1, 'RefersTo', 'asset:3')
+            >>> tracker.tickets.edit_link(1, 'RefersTo', 'https://wiki.example.com/printers')
+            >>> tracker.tickets.edit_link(1, 'DependsOn', 7, delete=True)
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 ignores the request, so
                   :py:exc:`~rt.exceptions.UnexpectedResponseError` is raised.
@@ -905,12 +917,10 @@ class Tickets:
             'ContentType': content_type,
         }
 
-        # Adding a one-shot cc/bcc is not supported by REST2 (RT 6.0.4)
-        # if cc:
-        #     post_data['Cc'] = cc  # noqa: ERA001
-        #
-        # if bcc:
-        #     post_data['Bcc'] = bcc  # noqa: ERA001
+        # No one-shot Cc/Bcc: REST2 (up to RT 6.0.4 at least) builds the message only from Content, ContentType and
+        # Subject, and passes the whole body to the update of the roles of the ticket, so "Cc" would REPLACE the Cc
+        # watchers of the ticket and "Bcc" is ignored (checked with RT 6.0.4, see python-rt PR #101). The web UI uses
+        # CcMessageTo/BccMessageTo of RT::Ticket->Correspond/Comment, which REST2 does not expose.
 
         response = self._t.send('POST', _path('ticket', ticket_id, action), json_data=post_data, attachments=attachments)
 

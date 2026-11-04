@@ -62,8 +62,8 @@ class AsyncRt:
     :py:class:`AsyncQueues` etc.::
 
         ticket = await tracker.tickets.get(1)
-        await tracker.tickets.tickets.comment(1, 'Looking into it')
-        async for found in tracker.tickets.tickets.search(queue='General', Status='new'):
+        await tracker.tickets.comment(1, 'Looking into it')
+        async for found in tracker.tickets.search(queue='General', Status='new'):
             ...
 
     .. warning:: The client targets the latest version of RT (6.0) and is tested with it.

@@ -382,6 +382,41 @@ def test_edit_link_failed(delete: bool, message: str, expected: type[rt.exceptio
         _mock_client(handler).tickets.edit_link(1, 'DependsOn', 2, delete=delete)
 
 
+# --- fields of linked objects in get() ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ('area', 'method', 'args', 'path'),
+    [
+        ('catalogs', 'get', (1,), '/catalog/1'),
+        ('groups', 'get', (5,), '/group/5'),
+        ('custom_fields', 'get', (2,), '/customfield/2'),
+        ('custom_fields', 'get_value', (2, 3), '/customfield/2/value/3'),
+        ('custom_roles', 'get', (1,), '/customrole/1'),
+        ('articles', 'get', (1,), '/article/1'),
+        ('classes', 'get', (1,), '/class/1'),
+        ('queues', 'get', ('General',), '/queue/General'),
+        ('users', 'get', ('root',), '/user/root'),
+        ('tickets', 'get_transaction', (7,), '/transaction/7'),
+        ('tickets', 'get_attachment', (8,), '/attachment/8'),
+    ],
+)
+def test_get_fields_of_linked_objects(area: str, method: str, args: tuple, path: str):
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(200, json={'id': 1})
+
+    client = _mock_client(handler)
+    getattr(getattr(client, area), method)(*args)
+    getattr(getattr(client, area), method)(*args, fields={'fields[Creator]': 'Name,EmailAddress'})
+
+    assert [request.url.path for request in requests] == [f'/REST/2.0{path}'] * 2
+    assert dict(requests[0].url.params) == {}
+    assert dict(requests[1].url.params) == {'fields[Creator]': 'Name,EmailAddress'}
+
+
 # --- error messages of edit operations --------------------------------------------------------------------------
 
 

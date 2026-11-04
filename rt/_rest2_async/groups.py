@@ -26,18 +26,20 @@ class AsyncGroups:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def get(self, group_id: str | int) -> dict[str, typing.Any]:
+    async def get(self, group_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get a group.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param group_id: ID of the group (RT does not support group names here).
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the group itself.
         :returns: The group as dictionary, including its direct members in the key Members (users by name,
                   groups by ID).
         :raises NotFoundError: If the group does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._t.dict_result(await self._t.send('GET', _path('group', group_id)))
+        return self._t.dict_result(await self._t.send('GET', _path('group', group_id), params=fields))
 
     async def create(self, name: str, **kwargs: JSONInput) -> int:
         """Create a user defined group.
@@ -182,7 +184,7 @@ class AsyncGroups:
 
         Example::
 
-            >>> tracker.groups.tickets.search(search_params=[{'field': 'Name', 'operator': 'LIKE', 'value': 'Staff'}])
+            >>> tracker.groups.search(search_params=[{'field': 'Name', 'operator': 'LIKE', 'value': 'Staff'}])
 
         .. note:: Requires RT 5.0.0 or newer.
 

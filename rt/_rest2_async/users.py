@@ -29,13 +29,15 @@ class AsyncUsers:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def get(self, user_id: int | str) -> dict[str, typing.Any]:
+    async def get(self, user_id: int | str, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get user details.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param user_id: Identification of user by username (str) or user ID
                         (int)
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the user itself.
         :returns: The user as dictionary, e.g. with the keys id, Name, RealName, EmailAddress, Privileged, Disabled,
                   Gecos, Comments, CustomFields, Memberships (the groups of the user), Created, Creator,
                   LastUpdated, LastUpdatedBy and _hyperlinks. RT only returns the fields the current user is
@@ -44,7 +46,7 @@ class AsyncUsers:
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         :raises NotFoundError: If the user does not exist.
         """
-        return self._t.dict_result(await self._t.send('GET', _path('user', user_id)))
+        return self._t.dict_result(await self._t.send('GET', _path('user', user_id), params=fields))
 
     async def exists(self, user_id: int | str, *, privileged: bool) -> bool:
         """Check if a given user exists.
@@ -228,7 +230,7 @@ class AsyncUsers:
 
         Example::
 
-            >>> tracker.users.tickets.search(search_params=[{'field': 'EmailAddress', 'operator': 'LIKE', 'value': '@example.com'}])
+            >>> tracker.users.search(search_params=[{'field': 'EmailAddress', 'operator': 'LIKE', 'value': '@example.com'}])
 
         .. note:: Requires RT 5.0.0 or newer, *privileged* requires RT 5.0.8 or newer (or any RT 6.0).
 

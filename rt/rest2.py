@@ -64,8 +64,8 @@ class Rt:
     :py:class:`Queues` etc.::
 
         ticket = tracker.tickets.get(1)
-        tracker.tickets.tickets.comment(1, 'Looking into it')
-        for found in tracker.tickets.tickets.search(queue='General', Status='new'):
+        tracker.tickets.comment(1, 'Looking into it')
+        for found in tracker.tickets.search(queue='General', Status='new'):
             ...
 
     .. warning:: The client targets the latest version of RT (6.0) and is tested with it.

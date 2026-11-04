@@ -232,9 +232,9 @@ class AsyncAssets:
 
         Example::
 
-            >>> tracker.assets.tickets.edit_link(3, 'RefersTo', 1)  # ticket 1
-            >>> tracker.assets.tickets.edit_link(3, 'Parent', 'asset:5')
-            >>> tracker.assets.tickets.edit_link(3, 'RefersTo', 'https://example.com/manual.pdf')
+            >>> tracker.assets.edit_link(3, 'RefersTo', 1)  # ticket 1
+            >>> tracker.assets.edit_link(3, 'Parent', 'asset:5')
+            >>> tracker.assets.edit_link(3, 'RefersTo', 'https://example.com/manual.pdf')
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 ignores the request, so
                   :py:exc:`~rt.exceptions.UnexpectedResponseError` is raised.
@@ -265,12 +265,14 @@ class AsyncCatalogs:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def get(self, catalog_id: str | int) -> dict[str, typing.Any]:
+    async def get(self, catalog_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get catalog.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param catalog_id: Identification of catalog by name (str) or ID (int).
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the catalog itself.
         :returns: Catalog as dictionary with these keys:
 
                       * id
@@ -289,7 +291,7 @@ class AsyncCatalogs:
         :raises NotFoundError: If the catalog does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._t.dict_result(await self._t.send('GET', _path('catalog', catalog_id)))
+        return self._t.dict_result(await self._t.send('GET', _path('catalog', catalog_id), params=fields))
 
     async def all(self, *, include_disabled: bool = False) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Get all catalogs which the user can see.

@@ -28,18 +28,20 @@ class AsyncCustomFields:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def get(self, custom_field_id: str | int) -> dict[str, typing.Any]:
+    async def get(self, custom_field_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get a custom field.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param custom_field_id: ID of the custom field (RT does not support names here).
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the custom field itself.
         :returns: The custom field as dictionary, including the names of its values in the key Values for the
                   type Select.
         :raises NotFoundError: If the custom field does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._t.dict_result(await self._t.send('GET', _path('customfield', custom_field_id)))
+        return self._t.dict_result(await self._t.send('GET', _path('customfield', custom_field_id), params=fields))
 
     async def create(self, name: str, field_type: str, lookup_type: str, **kwargs: JSONInput) -> int:
         """Create a custom field.
@@ -183,18 +185,20 @@ class AsyncCustomFields:
         async for item in self._t.paged_request(_path('customfield', custom_field_id, 'values'), json_data=list(search_params or [])):
             yield item
 
-    async def get_value(self, custom_field_id: str | int, value_id: str | int) -> dict[str, typing.Any]:
+    async def get_value(self, custom_field_id: str | int, value_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get a value of a custom field.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param custom_field_id: ID of the custom field (RT does not support names here).
         :param value_id: ID of the value.
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the value itself.
         :returns: The value as dictionary, e.g. with the keys id, Name, Description, Category and SortOrder.
         :raises NotFoundError: If the custom field or the value does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._t.dict_result(await self._t.send('GET', _path('customfield', custom_field_id, 'value', value_id)))
+        return self._t.dict_result(await self._t.send('GET', _path('customfield', custom_field_id, 'value', value_id), params=fields))
 
     async def add_value(self, custom_field_id: str | int, name: str, **kwargs: JSONInput) -> int:
         """Add a value to a custom field, e.g. a selectable value of the type Select.
@@ -274,8 +278,8 @@ class AsyncCustomFields:
 
         Example::
 
-            >>> tracker.custom_fields.tickets.search(object_type='queue', object_id=1)
-            >>> tracker.custom_fields.tickets.search(search_params=[{'field': 'LookupType', 'value': 'RT::Queue-RT::Ticket'}])
+            >>> tracker.custom_fields.search(object_type='queue', object_id=1)
+            >>> tracker.custom_fields.search(search_params=[{'field': 'LookupType', 'value': 'RT::Queue-RT::Ticket'}])
 
         .. note:: Requires RT 5.0.0 or newer.
 
@@ -327,18 +331,20 @@ class AsyncCustomRoles:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def get(self, custom_role_id: str | int) -> dict[str, typing.Any]:
+    async def get(self, custom_role_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get a custom role.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param custom_role_id: ID of the custom role (RT does not support names here).
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the custom role itself.
         :returns: The custom role as dictionary, e.g. with the keys id, Name, Description, MaxValues (1 for a single
                   member, 0 for several), LookupType, EntryHint and Disabled.
         :raises NotFoundError: If the custom role does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._t.dict_result(await self._t.send('GET', _path('customrole', custom_role_id)))
+        return self._t.dict_result(await self._t.send('GET', _path('customrole', custom_role_id), params=fields))
 
     async def search(
         self,

@@ -349,6 +349,10 @@ Python 3.11 or newer is required.
   tickets, e.g. by name, content type or creation time. The docstring of `tickets.get_attachments()` shows how to get the
   files of a single reply or comment.
 - REST2 `queues.search()` searches queues, `custom_roles.search()` and `custom_roles.get()` read custom roles.
+- The REST2 `get()` methods of all objects (`users.get()`, `queues.get()`, `groups.get()`, `catalogs.get()`,
+  `classes.get()`, `articles.get()`, `custom_fields.get()`, `custom_roles.get()`) as well as `custom_fields.get_value()`,
+  `tickets.get_transaction()` and `tickets.get_attachment()` accept `fields` to return fields of linked objects, like
+  `tickets.get()` and `assets.get()`, e.g. `queues.get('General', fields={'fields[Creator]': 'Name,EmailAddress'})`.
 - REST2 classes and articles (RT 5.0.1 or newer): `classes.all()`, `classes.search()`, `classes.get()`,
   `classes.create()`, `classes.edit()`, `classes.delete()`, `articles.search()`, `articles.get()`, `articles.create()`,
   `articles.edit()`, `articles.delete()` and `articles.history()`.

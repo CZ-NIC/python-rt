@@ -22,19 +22,21 @@ class AsyncArticles:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def get(self, article_id: str | int) -> dict[str, typing.Any]:
+    async def get(self, article_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get an article.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param article_id: ID of the article.
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the article itself.
         :returns: The article as dictionary, e.g. with the keys id, Name, Summary, Class, Disabled and CustomFields,
                   which contain its text in the custom field Content.
         :raises NotFoundError: If the article does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._t.dict_result(await self._t.send('GET', _path('article', article_id)))
+        return self._t.dict_result(await self._t.send('GET', _path('article', article_id), params=fields))
 
     async def create(self, name: str, class_id: str | int, **kwargs: JSONInput) -> int:
         """Create an article.
@@ -123,7 +125,7 @@ class AsyncArticles:
 
         Example::
 
-            >>> tracker.articles.tickets.search(search_params=[{'field': 'Class', 'value': 1}, {'field': 'Name', 'operator': 'LIKE', 'value': 'VPN'}])
+            >>> tracker.articles.search(search_params=[{'field': 'Class', 'value': 1}, {'field': 'Name', 'operator': 'LIKE', 'value': 'VPN'}])
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
@@ -166,19 +168,21 @@ class AsyncClasses:
         async for item in self._t.paged_request('classes/all', params=params):
             yield item
 
-    async def get(self, class_id: str | int) -> dict[str, typing.Any]:
+    async def get(self, class_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get a class of articles.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param class_id: Identification of the class by name (str) or ID (int).
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the class itself.
         :returns: The class as dictionary, e.g. with the keys id, Name, Description, Disabled and
                   ArticleCustomFields (the custom fields of its articles, e.g. Content).
         :raises NotFoundError: If the class does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        return self._t.dict_result(await self._t.send('GET', _path('class', class_id)))
+        return self._t.dict_result(await self._t.send('GET', _path('class', class_id), params=fields))
 
     async def create(self, name: str, **kwargs: JSONInput) -> int:
         """Create a class of articles.

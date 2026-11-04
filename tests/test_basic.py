@@ -441,6 +441,10 @@ def test_users(rt_connection: Rt):
 def test_queues(rt_connection: Rt):
     queue = rt_connection.queues.get(RT_QUEUE)
     assert queue['Name'] == RT_QUEUE
+    assert 'Name' not in queue['Creator']
+
+    queue = rt_connection.queues.get(RT_QUEUE, fields={'fields[Creator]': 'Name'})
+    assert queue['Creator']['Name'] == 'RT_System'
 
     queues = [item for item in rt_connection.queues.all()]
     assert len(queues) >= 1

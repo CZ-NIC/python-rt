@@ -438,6 +438,10 @@ async def test_users(async_rt_connection: AsyncRt):
 async def test_queues(async_rt_connection: AsyncRt):
     queue = await async_rt_connection.queues.get(RT_QUEUE)
     assert queue['Name'] == RT_QUEUE
+    assert 'Name' not in queue['Creator']
+
+    queue = await async_rt_connection.queues.get(RT_QUEUE, fields={'fields[Creator]': 'Name'})
+    assert queue['Creator']['Name'] == 'RT_System'
 
     queues = [item async for item in async_rt_connection.queues.all()]
     assert len(queues) >= 1

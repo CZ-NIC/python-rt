@@ -25,7 +25,7 @@ class Queues:
     def __init__(self, transport: _Transport) -> None:
         self._t = transport
 
-    def get(self, queue_id: str | int) -> dict[str, typing.Any]:
+    def get(self, queue_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Get queue details.
 
         Example of a return result:
@@ -82,12 +82,14 @@ class Queues:
 
         :param queue_id: Identification of queue by name (str) or queue ID
                          (int)
+        :param fields: Query parameters as defined by RT to return fields of linked objects, e.g.
+                       ``{'fields[Creator]': 'Name,EmailAddress'}``. RT always returns all fields of the queue itself.
         :returns: Queue details as a dictionary
 
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         :raises NotFoundError: In case the queue does not exist
         """
-        return self._t.dict_result(self._t.send('GET', _path('queue', queue_id)))
+        return self._t.dict_result(self._t.send('GET', _path('queue', queue_id), params=fields))
 
     def all(self, *, include_disabled: bool = False) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Return a list of all queues.
@@ -200,7 +202,7 @@ class Queues:
 
         Example::
 
-            >>> tracker.queues.tickets.search(search_params=[{'field': 'Lifecycle', 'value': 'default'}])
+            >>> tracker.queues.search(search_params=[{'field': 'Lifecycle', 'value': 'default'}])
 
         Unlike for other objects, RT combines several conditions on the same field with AND for queues. Add
         ``'entry_aggregator': 'OR'`` to a condition to combine it with the previous one with OR.

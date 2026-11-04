@@ -28,7 +28,7 @@ Python 3.11 or newer is required.
   subclass of `ValueError`, so `except ValueError` keeps working.
 
 #### REST1
-- Pass all constructor arguments by keyword, as well as `cc`, `bcc`, `content_type` and `files` of `tickets.reply()`/`tickets.comment()`:
+- Pass all constructor arguments by keyword, as well as `cc`, `bcc`, `content_type` and `files` of `reply()`/`comment()`:
   ```python
   # before
   tracker = rt.rest1.Rt('https://rt.example.com/REST/1.0/', 'user', 'password')
@@ -209,7 +209,7 @@ Python 3.11 or newer is required.
 - **Breaking:** Split the REST2 sync and async implementations: `AsyncRt` moved to `rt.rest2_async`
   (use `rt.rest2_async.AsyncRt` instead of `rt.rest2.AsyncRt`).
   `rt.rest2` is now generated from `rt.rest2_async` using *unasyncd*.
-- **Breaking:** The sync REST2 methods `get_ticket_history`, `get_attachments`, `get_attachments_ids` and `get_all_queues`
+- **Breaking:** The sync REST2 methods `tickets.history()`, `tickets.get_attachments()`, `tickets.get_attachments_ids()` and `queues.all()`
   now return iterators, like their async counterparts, instead of lists. Wrap them in `list()` if a list is needed.
   Errors (e.g. for a non-existent ticket) are raised when iterating instead of when calling the method.
 - Move the REST2 `Attachment` class to `rt.common`; it is still available as `rt.rest2.Attachment` and `rt.rest2_async.Attachment`.
@@ -236,7 +236,7 @@ Python 3.11 or newer is required.
   builtin `ConnectionError`. It is now raised for connection and transport errors in REST1 and REST2 (before, the builtin
   `ConnectionError` was raised). As it is a subclass of both `RtError` and the builtin `ConnectionError`, existing
   `except ConnectionError` code keeps working.
-- **Breaking:** The parameters `cc`, `bcc`, `content_type` and `files` of the REST1 `tickets.reply()` and `tickets.comment()` are keyword-only.
+- **Breaking:** The parameters `cc`, `bcc`, `content_type` and `files` of the REST1 `reply()` and `comment()` are keyword-only.
 - REST2 raises `UnexpectedResponseError` instead of `json.JSONDecodeError` if RT (or a proxy in between) returns an invalid
   JSON response, e.g. an HTML login page.
 - REST2 debug logging no longer contains credentials (the `Authorization` header is redacted, request bodies are not logged)
@@ -247,8 +247,8 @@ Python 3.11 or newer is required.
   in code that is type checked as well (runtime behaviour is unchanged):
   - REST2: values passed as `**kwargs` to create/edit methods are typed as JSON data (`rt.common.JSONInput`), query
     parameters as `rt.common.QueryParams`. Returned RT objects stay `dict[str, Any]`.
-  - REST1: return types are concrete instead of `dict`, e.g. `tickets.search()` returns `list[dict[str, str | Sequence[str]]]`.
-    Ticket fields passed to `tickets.create()`/`tickets.edit()` are typed `str | list[str] | tuple[str, ...]`, which are
+  - REST1: return types are concrete instead of `dict`, e.g. `search()` returns `list[dict[str, str | Sequence[str]]]`.
+    Ticket fields passed to `create_ticket()`/`edit_ticket()` are typed `str | list[str] | tuple[str, ...]`, which are
     the only types these methods ever supported. Files to attach are typed `rt.rest1.FileTuple`.
 - REST2 validates the content of responses (e.g. status messages must be strings, created objects must have an ID)
   and raises `UnexpectedResponseError` instead of failing later with an unrelated error.

@@ -286,7 +286,8 @@ class CustomFields:
         .. note:: Requires RT 5.0.0 or newer.
 
         :param object_type: ``'queue'``, ``'catalog'`` or ``'class'`` to search only the custom fields applied to
-                            the object *object_id*, ``None`` (default) to search all custom fields.
+                            the object *object_id* (RT includes the custom fields applied globally to all queues,
+                            catalogs or classes), ``None`` (default) to search all custom fields.
         :param object_id: ID of the queue, catalog or class (RT does not support names here).
         :param search_params: Conditions of the search as described for :py:meth:`~Assets.search`, e.g.
                               ``[{'field': 'Name', 'value': 'Severity'}]``. All custom fields if not specified.
@@ -294,10 +295,11 @@ class CustomFields:
                        dictionary with query parameters as defined by RT. By default Name, Type, Description,
                        LookupType, MaxValues and Disabled.
         :param include_disabled: Set to True to also return disabled custom fields.
-        :returns: Iterator of the found custom fields. Empty if the queue, catalog or class does not exist (RT does not
-                  report it).
+        :returns: Iterator of the found custom fields.
         :raises InvalidUseError: If *object_type* is not supported, or only one of *object_type* and *object_id*
                                  is specified.
+        :raises NotFoundError: If the queue, catalog or class does not exist.
+        :raises NotAllowedError: If the user is not allowed to see the queue, catalog or class.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         if (object_type is None) != (object_id is None):
@@ -308,7 +310,10 @@ class CustomFields:
         else:
             if object_type not in VALID_CUSTOM_FIELD_OBJECT_TYPES:
                 raise InvalidUseError(f'Unsupported object type. Use one of "{", ".join(VALID_CUSTOM_FIELD_OBJECT_TYPES)}".')
-            selector = _path(object_type, typing.cast('str | int', object_id), 'customfields')
+            object_id = typing.cast('str | int', object_id)
+            # For an object which does not exist, RT (6.0.4 at least) searches all custom fields with the conditions
+            self._t.send('GET', _path(object_type, object_id))
+            selector = _path(object_type, object_id, 'customfields')
 
         search_params = list(search_params or [])
         if not search_params and object_type is None:

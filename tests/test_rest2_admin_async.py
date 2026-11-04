@@ -304,6 +304,14 @@ async def test_custom_field(async_rt_connection: AsyncRt):
     assert [(int(item['id']), item['Name'], item['Type']) for item in by_name] == [(cf_id, name, 'Select')]
     assert cf_id in [int(item['id']) async for item in async_rt_connection.custom_fields.search()]
     assert [int(item['id']) async for item in async_rt_connection.custom_fields.search(object_type='queue', object_id=queue_id)] == [cf_id]
+    # RT searches all custom fields with the conditions if the object does not exist
+    with pytest.raises(rt.exceptions.NotFoundError):
+        _ = [
+            item
+            async for item in async_rt_connection.custom_fields.search(
+                object_type='queue', object_id=999999999, search_params=[{'field': 'Name', 'value': name}]
+            )
+        ]
 
     assert (await async_rt_connection.custom_fields.edit(cf_id, Description='edited')).complete
     # RT reports invalid values only in its messages, the value is not changed

@@ -299,6 +299,8 @@ Python 3.11 or newer is required.
 - REST2 `tickets.get_attachments()` and `tickets.get_attachments_ids()` returned the attachments of other tickets
   (all which match the search) if the ticket did not exist or the user was not allowed to see it, as RT then searches
   the attachments of all tickets. They raise `NotFoundError` or `NotAllowedError` now.
+  The same for `custom_fields.search()` with `object_type`/`object_id` and `search_params`, which returned all custom
+  fields matching the conditions if the queue, catalog or class did not exist.
 - REST2 `tickets.last_updated()` accepted invalid dates like 2024-02-30.
 - REST2 delete operations treated a non-JSON response other than "204 No Content" (e.g. an HTML page returned by a proxy)
   as success.

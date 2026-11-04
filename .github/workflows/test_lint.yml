@@ -47,8 +47,9 @@ jobs:
           echo "RT_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: Test with pytest
+        # 2 parallel processes (pytest-xdist): the runner has 4 CPUs, which it shares with the RT container
         run: |
-          uv run pytest -v -n 0 -m '' tests
+          uv run pytest -v -n 2 -m '' tests
 
 
   coverage:
@@ -72,7 +73,6 @@ jobs:
         run: |
           python3 -m pip install uv
           uv sync --group test
-          uv pip install coverage[toml]
 
       - name: Prepare RT
         # REST2 can not create authentication tokens or apply custom fields to queues, see tests/rt_initdata.pl
@@ -85,7 +85,8 @@ jobs:
 
       - name: Generate coverage data
         run: |
-          uv run coverage run --omit tests --parallel-mode -m pytest -n 0 -m '' tests
+          # the processes of pytest-xdist are measured too, see [tool.coverage.run] in pyproject.toml
+          uv run coverage run -m pytest -n 2 -m '' tests
 
       - name: Combine coverage & create xml report
         run: |

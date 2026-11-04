@@ -12,7 +12,7 @@ authors = [{ name = "Georges Toth", email = "georges.toth@govcert.etat.lu" }]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
-  "Operating System :: POSIX",
+  "Operating System :: OS Independent",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3",
@@ -59,7 +59,7 @@ test = [
   "pytest~=9.1",
   "pytest-asyncio~=1.4",
   "pytest-xdist~=3.8",
-  "coverage~=7.6",
+  "coverage~=7.10",
   "typeguard>=4.6.0",
 ]
 
@@ -151,6 +151,14 @@ markers = [
   "sync: tests of the sync REST2 client, generated from the async tests (not run by default)",
   "live: tests which need a running RT (all others, e.g. with mocked responses, run in seconds: pytest -m 'not live')",
 ]
+
+[tool.coverage.run]
+# The tests run in parallel processes (pytest-xdist): measure them too, with one data file per process, which
+# `coverage combine` merges. The main pytest process runs no code of the library.
+patch = ["subprocess"]
+parallel = true
+source = ["rt"]
+disable_warnings = ["no-data-collected"]
 
 [tool.ruff]
 line-length = 160

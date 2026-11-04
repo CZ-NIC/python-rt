@@ -5,13 +5,17 @@ import typing
 
 from rt._rest2_async.transport import _AsyncTransport
 from rt.common import (
+    _ASSET_FIELDS,
+    _CATALOG_FIELDS,
     _HISTORY_FIELDS,
     _LINK_REFS,
     ActionResult,
     JSONInput,
     JSONSearchParams,
+    SortOrder,
     TicketLinkName,
     _fields_params,
+    _order_params,
     _path,
     _raise_for_messages,
 )
@@ -75,6 +79,7 @@ class AsyncAssets:
                                  or the catalog does not exist (RT returns status code 403 for both).
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _ASSET_FIELDS, 'assets.create')
         response = await self._t.send('POST', 'asset', json_data={'Name': name, 'Catalog': catalog, **kwargs})
 
         return int(self._t.created_id(self._t.dict_result(response)))
@@ -93,6 +98,7 @@ class AsyncAssets:
         :raises NotFoundError: If the asset does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _ASSET_FIELDS, 'assets.edit')
         return self._t.result(self._t.list_result(await self._t.send('PUT', _path('asset', asset_id), json_data=kwargs)))
 
     async def delete(self, asset_id: str | int) -> None:
@@ -115,20 +121,36 @@ class AsyncAssets:
         # RT returns no message if the asset is already deleted
         _raise_for_messages(msg)
 
-    async def history(self, asset_id: str | int) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+    async def history(
+        self,
+        asset_id: str | int,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        order: SortOrder | None = None,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Get asset history.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param asset_id: Asset ID.
+        :param search_params: Conditions of the search as described for :py:meth:`~AsyncAssets.search`, e.g. only
+                              the changes of the status: ``[{'field': 'Type', 'value': 'Status'}]``.
+        :param fields: Fields returned for each transaction: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT, e.g. ``{'fields[Creator]': 'Name'}``. Defaults to the fields of :py:meth:`~AsyncTickets.history`.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``. Default: oldest first.
         :returns: Iterator of transactions, each a dictionary with the same keys as for
                   :py:meth:`~AsyncTickets.history`. Empty if the asset does not exist.
         """
+        self._t.warn_unknown_conditions(search_params, 'transactions', 'assets.history')
         async for transaction in self._t.paged_request(
             _path('asset', asset_id, 'history'),
+            json_data=list(search_params) if search_params else None,
             params={
-                'fields': _HISTORY_FIELDS,
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
+                **_fields_params(fields, default_fields=_HISTORY_FIELDS),
+                **_order_params(order),
             },
         ):
             yield transaction
@@ -140,6 +162,7 @@ class AsyncAssets:
         search_params: collections.abc.Sequence[collections.abc.Mapping[str, JSONInput]] | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         raw_query: str | None = None,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Search assets in a catalog, with conditions or an AssetSQL query.
 
@@ -177,10 +200,13 @@ class AsyncAssets:
         :param raw_query: AssetSQL query, used instead of *catalog_id* and *search_params* (requires RT 5.0.2).
                           It is passed to RT as is, so never include untrusted input in it. RT ignores an invalid
                           query and then returns all assets (RT 6.0.4).
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the found assets.
         :raises InvalidUseError: If *raw_query* is empty or combined with *catalog_id* or *search_params*.
         """
-        get_params = _fields_params(fields, default_fields='Owner,Description,Status')
+        self._t.warn_unknown_conditions(search_params, 'assets', 'assets.search')
+        get_params = {**_fields_params(fields, default_fields='Owner,Description,Status'), **_order_params(order)}
 
         if raw_query is not None:
             if catalog_id is not None or search_params is not None:
@@ -293,17 +319,31 @@ class AsyncCatalogs:
         """
         return self._t.dict_result(await self._t.send('GET', _path('catalog', catalog_id), params=fields))
 
-    async def all(self, *, include_disabled: bool = False) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+    async def all(
+        self,
+        *,
+        include_disabled: bool = False,
+        fields: str | list[str] | dict[str, str] | None = None,
+        order: SortOrder | None = None,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Get all catalogs which the user can see.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param include_disabled: Set to True to also return disabled catalogs.
+        :param fields: Fields returned for each catalog: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT, e.g. ``{'fields[Creator]': 'Name'}``. Defaults to the fields listed below.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the catalogs, each a dictionary with the keys id, type, _url, Name, Description,
                   Lifecycle and Disabled.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        params: dict[str, str | int] = {'fields': 'Name,Description,Lifecycle,Disabled', 'find_disabled_rows': int(include_disabled)}
+        params: dict[str, str | int | list[str]] = {
+            **_fields_params(fields, default_fields='Name,Description,Lifecycle,Disabled'),
+            **_order_params(order),
+            'find_disabled_rows': int(include_disabled),
+        }
 
         async for item in self._t.paged_request('catalogs/all', params=params):
             yield item
@@ -321,6 +361,7 @@ class AsyncCatalogs:
         :raises NotAllowedError: If the user is not allowed to create catalogs.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _CATALOG_FIELDS, 'catalogs.create')
         response = await self._t.send('POST', 'catalog', json_data={'Name': name, **kwargs})
 
         return int(self._t.created_id(self._t.dict_result(response)))
@@ -339,6 +380,7 @@ class AsyncCatalogs:
         :raises NotFoundError: If the catalog does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _CATALOG_FIELDS, 'catalogs.edit')
         return self._t.result(self._t.list_result(await self._t.send('PUT', _path('catalog', catalog_id), json_data=kwargs)))
 
     async def delete(self, catalog_id: str | int) -> None:
@@ -358,6 +400,7 @@ class AsyncCatalogs:
         search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         include_disabled: bool = False,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Search catalogs.
 
@@ -369,15 +412,19 @@ class AsyncCatalogs:
         :param fields: Fields returned for each catalog: a comma separated string or list of fields, or a dictionary
                        with query parameters as defined by RT. By default Name, Description, Lifecycle and Disabled.
         :param include_disabled: Set to True to also return disabled catalogs.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the found catalogs.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_conditions(search_params, 'catalogs', 'catalogs.search')
         search_params = list(search_params or [])
         if not search_params:
             # RT returns no catalog for a search without a condition
             search_params = [{'field': 'id', 'operator': '>', 'value': 0}]
 
-        params: dict[str, str | int] = {
+        params: dict[str, str | int | list[str]] = {
+            **_order_params(order),
             **_fields_params(fields, default_fields='Name,Description,Lifecycle,Disabled'),
             'find_disabled_rows': int(include_disabled),
         }

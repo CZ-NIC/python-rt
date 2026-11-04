@@ -191,8 +191,9 @@ def test_group_members(rt_connection: Rt):
     rt_connection.groups.add_member(group_id, inner_group_id)
     rt_connection.groups.add_member(inner_group_id, inner_user_id)
 
-    def member_ids(**kwargs: bool) -> set[tuple[str, int]]:
-        return {(member['type'], int(member['id'])) for member in rt_connection.groups.get_members(group_id, **kwargs)}
+    def member_ids(*, recursive: bool = False, users: bool = True, groups: bool = True) -> set[tuple[str, int]]:
+        members = rt_connection.groups.get_members(group_id, recursive=recursive, users=users, groups=groups)
+        return {(member['type'], int(member['id'])) for member in members}
 
     assert member_ids() == {('user', user_id), ('group', inner_group_id)}
     assert member_ids(users=False) == {('group', inner_group_id)}

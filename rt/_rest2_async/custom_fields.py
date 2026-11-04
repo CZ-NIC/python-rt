@@ -5,12 +5,16 @@ import typing
 
 from rt._rest2_async.transport import _AsyncTransport
 from rt.common import (
+    _CUSTOM_FIELD_FIELDS,
+    _CUSTOM_FIELD_VALUE_FIELDS,
     VALID_CUSTOM_FIELD_OBJECT_TYPES,
     ActionResult,
     CustomFieldObjectType,
     JSONInput,
     JSONSearchParams,
+    SortOrder,
     _fields_params,
+    _order_params,
     _path,
 )
 from rt.exceptions import (
@@ -69,6 +73,7 @@ class AsyncCustomFields:
         :raises NotAllowedError: If the user is not allowed to create custom fields.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _CUSTOM_FIELD_FIELDS, 'custom_fields.create')
         if 'Queue' in kwargs and lookup_type != 'RT::Queue-RT::Ticket':
             raise InvalidUseError('Queue can only be specified for ticket custom fields, use custom_fields.apply() for other lookup types.')
 
@@ -91,6 +96,7 @@ class AsyncCustomFields:
         :raises NotFoundError: If the custom field does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _CUSTOM_FIELD_FIELDS, 'custom_fields.edit')
         return self._t.result(self._t.list_result(await self._t.send('PUT', _path('customfield', custom_field_id), json_data=kwargs)))
 
     async def delete(self, custom_field_id: str | int) -> None:
@@ -170,6 +176,7 @@ class AsyncCustomFields:
         custom_field_id: str | int,
         *,
         search_params: JSONSearchParams | None = None,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Get the values of a custom field, e.g. the selectable values of the type Select.
 
@@ -178,11 +185,16 @@ class AsyncCustomFields:
         :param custom_field_id: ID of the custom field (RT does not support names here).
         :param search_params: Conditions of the search as described for :py:meth:`~AsyncAssets.search`, e.g.
                               ``[{'field': 'Name', 'value': 'High'}]``. All values if not specified.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the values, each a dictionary with the keys id, name, type and _url. Empty if the custom
                   field does not exist (RT does not report it).
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        async for item in self._t.paged_request(_path('customfield', custom_field_id, 'values'), json_data=list(search_params or [])):
+        self._t.warn_unknown_conditions(search_params, 'customfieldvalues', 'custom_fields.get_values')
+        async for item in self._t.paged_request(
+            _path('customfield', custom_field_id, 'values'), json_data=list(search_params or []), params=_order_params(order)
+        ):
             yield item
 
     async def get_value(self, custom_field_id: str | int, value_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
@@ -213,6 +225,7 @@ class AsyncCustomFields:
                                  Custom Field #").
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _CUSTOM_FIELD_VALUE_FIELDS, 'custom_fields.add_value')
         response = await self._t.send('POST', _path('customfield', custom_field_id, 'value'), json_data={'Name': name, **kwargs})
 
         return int(self._t.created_id(self._t.dict_result(response)))
@@ -232,6 +245,7 @@ class AsyncCustomFields:
         :raises NotFoundError: If the custom field or the value does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _CUSTOM_FIELD_VALUE_FIELDS, 'custom_fields.edit_value')
         return self._t.result(self._t.list_result(await self._t.send('PUT', _path('customfield', custom_field_id, 'value', value_id), json_data=kwargs)))
 
     async def delete_value(self, custom_field_id: str | int, value_id: str | int) -> None:
@@ -273,6 +287,7 @@ class AsyncCustomFields:
         search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         include_disabled: bool = False,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Search custom fields, all or those applied to a queue, catalog or class.
 
@@ -293,6 +308,8 @@ class AsyncCustomFields:
                        dictionary with query parameters as defined by RT. By default Name, Type, Description,
                        LookupType, MaxValues and Disabled.
         :param include_disabled: Set to True to also return disabled custom fields.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the found custom fields.
         :raises InvalidUseError: If *object_type* is not supported, or only one of *object_type* and *object_id*
                                  is specified.
@@ -300,6 +317,7 @@ class AsyncCustomFields:
         :raises NotAllowedError: If the user is not allowed to see the queue, catalog or class.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_conditions(search_params, 'customfields', 'custom_fields.search')
         if (object_type is None) != (object_id is None):
             raise InvalidUseError('object_type and object_id must be specified together.')
 
@@ -318,7 +336,8 @@ class AsyncCustomFields:
             # RT returns no custom field for a search of all custom fields without a condition
             search_params = [{'field': 'id', 'operator': '>', 'value': 0}]
 
-        params: dict[str, str | int] = {
+        params: dict[str, str | int | list[str]] = {
+            **_order_params(order),
             **_fields_params(fields, default_fields='Name,Type,Description,LookupType,MaxValues,Disabled'),
             'find_disabled_rows': int(include_disabled),
         }
@@ -357,6 +376,7 @@ class AsyncCustomRoles:
         search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         include_disabled: bool = False,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Search custom roles.
 
@@ -370,10 +390,18 @@ class AsyncCustomRoles:
                        dictionary with query parameters as defined by RT. By default Name, Description, MaxValues,
                        LookupType and Disabled.
         :param include_disabled: Set to True to also return disabled custom roles.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the found custom roles.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
         async for item in self._t.search_objects(
-            'customroles', search_params, fields, 'Name,Description,MaxValues,LookupType,Disabled', include_disabled=include_disabled
+            'customroles',
+            search_params,
+            fields,
+            'Name,Description,MaxValues,LookupType,Disabled',
+            include_disabled=include_disabled,
+            order=order,
+            method='custom_roles.search',
         ):
             yield item

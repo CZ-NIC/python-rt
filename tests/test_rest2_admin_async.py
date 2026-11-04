@@ -189,8 +189,9 @@ async def test_group_members(async_rt_connection: AsyncRt):
     await async_rt_connection.groups.add_member(group_id, inner_group_id)
     await async_rt_connection.groups.add_member(inner_group_id, inner_user_id)
 
-    async def member_ids(**kwargs: bool) -> set[tuple[str, int]]:
-        return {(member['type'], int(member['id'])) async for member in async_rt_connection.groups.get_members(group_id, **kwargs)}
+    async def member_ids(*, recursive: bool = False, users: bool = True, groups: bool = True) -> set[tuple[str, int]]:
+        members = async_rt_connection.groups.get_members(group_id, recursive=recursive, users=users, groups=groups)
+        return {(member['type'], int(member['id'])) async for member in members}
 
     assert await member_ids() == {('user', user_id), ('group', inner_group_id)}
     assert await member_ids(users=False) == {('group', inner_group_id)}

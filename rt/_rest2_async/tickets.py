@@ -10,6 +10,7 @@ from rt.common import (
     _CORRESPOND_ACTIONS,
     _HISTORY_FIELDS,
     _LINK_REFS,
+    _TICKET_FIELDS,
     VALID_CONTENT_TYPES,
     ActionResult,
     Attachment,
@@ -17,10 +18,12 @@ from rt.common import (
     JSONInput,
     JSONSearchParams,
     SearchFormat,
+    SortOrder,
     TicketLinkName,
     _build_ticket_query,
     _CorrespondAction,
     _fields_params,
+    _order_params,
     _path,
     _search_fields_params,
 )
@@ -39,12 +42,21 @@ class AsyncTickets:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    def new_correspondence(self, *, queue: str | None = None) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+    def new_correspondence(
+        self,
+        *,
+        queue: str | None = None,
+        order: SortOrder = '-LastUpdated',
+        fields: SearchFormat | list[str] | dict[str, str] = 'l',
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Obtains tickets changed by other users than the one used for the connection.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param queue: Queue where to search
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Status', '-Created']``. Default: the most recently updated first.
+        :param fields: Fields returned for each ticket, see :py:meth:`search`.
 
         :returns: Iterator of tickets which were last updated by another user than
                   the one used for the connection, ordered in decreasing order by LastUpdated.
@@ -52,13 +64,15 @@ class AsyncTickets:
                   :py:meth:`~AsyncTickets.search`.
         """
         # RT replaces __CurrentUser__ with the user who executes the search
-        return self.search(queue=queue, order='-LastUpdated', LastUpdatedBy__notexact='__CurrentUser__')
+        return self.search(queue=queue, order=order, fields=fields, LastUpdatedBy__notexact='__CurrentUser__')
 
     def last_updated(
         self,
         since: str | dt.date | dt.datetime,
         *,
         queue: str | None = None,
+        order: SortOrder = '-LastUpdated',
+        fields: SearchFormat | list[str] | dict[str, str] = 'l',
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Obtains tickets changed after given date.
 
@@ -71,6 +85,9 @@ class AsyncTickets:
                         string in form '2011-02-24', optionally followed by a time, e.g. '2011-02-24 13:45:00':
                         interpreted by RT in the timezone of the RT user (or the default timezone of RT).
         :param queue: Queue where to search
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Status', '-Created']``. Default: the most recently updated first.
+        :param fields: Fields returned for each ticket, see :py:meth:`search`.
 
         :returns: Iterator of tickets with LastUpdated parameter later than
                   *since* ordered in decreasing order by LastUpdated.
@@ -83,7 +100,7 @@ class AsyncTickets:
         if not self._validate_date(since_value):
             raise InvalidUseError(f'Invalid date specified - "{since}"')
 
-        return self.search(queue=queue, order='-LastUpdated', LastUpdated__gt=since_value)
+        return self.search(queue=queue, order=order, fields=fields, LastUpdated__gt=since_value)
 
     async def get(self, ticket_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:
         """Fetch ticket by its ID.
@@ -150,6 +167,7 @@ class AsyncTickets:
                                  exist or is disabled (RT returns status code 403 for all of them).
         :raises BadRequestError: If RT rejects the request, e.g. for an invalid value.
         """
+        self._t.warn_unknown_fields(kwargs, _TICKET_FIELDS, 'tickets.create')
         if content_type not in VALID_CONTENT_TYPES:
             raise InvalidUseError('Invalid content-type specified.')
 
@@ -191,6 +209,7 @@ class AsyncTickets:
         :raises NotFoundError: If the ticket does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _TICKET_FIELDS, 'tickets.edit')
         msg = self._t.list_result(await self._t.send('PUT', _path('ticket', ticket_id), json_data=kwargs))
 
         return self._t.result(msg)
@@ -211,7 +230,7 @@ class AsyncTickets:
         self,
         *,
         queue: str | None = None,
-        order: str | None = None,
+        order: SortOrder | None = None,
         raw_query: str | None = None,
         fields: SearchFormat | list[str] | dict[str, str] = 'l',
         conditions: collections.abc.Mapping[str, object] | None = None,
@@ -232,9 +251,8 @@ class AsyncTickets:
 
         :param queue:      Queue where to search. If you wish to search across
                            all of your queues, pass None as the argument.
-        :param order:      Name of field sorting result list, for descending
-                           order put - before the field name. E.g. -Created
-                           will put the newest tickets at the beginning
+        :param order:      Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'`` for the
+                           newest tickets first, or a list of them, e.g. ``['Status', '-Created']``.
         :param raw_query:  A TicketSQL query (see the query builder of RT), used instead of *conditions* and
                            *kwargs*. *queue* and *order* can still be used. The query is passed to RT as is,
                            so never include untrusted input in it.
@@ -309,26 +327,31 @@ class AsyncTickets:
         # The query is sent in the body of a POST request, so it is not limited by the maximum length of URLs and does
         # not appear in the access logs of RT or proxies. RT reads it like a query parameter.
         query = _build_ticket_query(queue, raw_query, kwargs)
-        get_params: dict[str, str | int] = {}
-
-        if order:
-            if order.startswith('-'):
-                get_params['orderby'] = order[1:]
-                get_params['order'] = 'DESC'
-            else:
-                get_params['orderby'] = order
-
-        get_params.update(_search_fields_params(fields))
+        get_params: dict[str, str | int | list[str]] = {**_order_params(order), **_search_fields_params(fields)}
 
         async for item in self._t.paged_request('tickets', params=get_params, form_data={'query': query}):
             yield item
 
-    async def history(self, ticket_id: str | int) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+    async def history(
+        self,
+        ticket_id: str | int,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        order: SortOrder | None = None,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Get set of short history items.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param ticket_id: ID of ticket
+        :param search_params: Conditions of the search as described for :py:meth:`~AsyncAssets.search`, e.g. only
+                              the changes of the status: ``[{'field': 'Type', 'value': 'Status'}]``.
+        :param fields: Fields returned for each transaction: a comma separated string or list of fields, or a
+                       dictionary with query parameters as defined by RT, e.g. ``{'fields[Creator]': 'Name'}``.
+                       Defaults to the fields listed below.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Status', '-Created']``. Default: oldest first.
         :returns: Iterator of the transactions of the ticket, oldest first, each a dictionary with the keys id, type,
                   _url, Type (e.g. Create, Correspond, Comment, Status, Set, CustomField), Field (the changed field,
                   e.g. Owner), OldValue, NewValue, Data (e.g. the subject of a message), TimeTaken, Creator (a
@@ -336,11 +359,14 @@ class AsyncTickets:
                   :py:meth:`messages` for the text of messages. Empty if the ticket does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_conditions(search_params, 'transactions', 'tickets.history')
         async for transaction in self._t.paged_request(
             _path('ticket', ticket_id, 'history'),
+            json_data=list(search_params) if search_params else None,
             params={
-                'fields': _HISTORY_FIELDS,
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
+                **_fields_params(fields, default_fields=_HISTORY_FIELDS),
+                **_order_params(order),
             },
         ):
             yield transaction
@@ -367,7 +393,7 @@ class AsyncTickets:
         search_params: JSONSearchParams | None = None,
         raw_query: str | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
-        order: str | None = None,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Search transactions, e.g. of a ticket or across tickets, with conditions or a TransactionSQL query.
 
@@ -391,24 +417,22 @@ class AsyncTickets:
                        dictionary with query parameters as defined by RT. By default Type, Created, Creator,
                        ObjectType and ObjectId. ``Content`` returns the text of messages, see
                        :py:meth:`messages`.
-        :param order: Name of the field to sort the transactions by, with ``-`` in front for descending order,
-                      e.g. ``'-Created'``.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Status', '-Created']``.
         :returns: Iterator of the found transactions.
         :raises InvalidUseError: If not exactly one of *search_params* and *raw_query* is specified, or *raw_query* is
                                  empty.
         :raises BadRequestError: If the TransactionSQL query is invalid.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_conditions(search_params, 'transactions', 'tickets.search_transactions')
         if (search_params is None) == (raw_query is None):
             raise InvalidUseError('Specify either search_params or raw_query.')
 
-        params: dict[str, str | int] = {**_fields_params(fields, default_fields='Type,Created,Creator,ObjectType,ObjectId')}
-        if order:
-            if order.startswith('-'):
-                params['orderby'] = order[1:]
-                params['order'] = 'DESC'
-            else:
-                params['orderby'] = order
+        params: dict[str, str | int | list[str]] = {
+            **_fields_params(fields, default_fields='Type,Created,Creator,ObjectType,ObjectId'),
+            **_order_params(order),
+        }
 
         if raw_query is not None:
             if not raw_query.strip():
@@ -589,6 +613,7 @@ class AsyncTickets:
         search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         files_only: bool = True,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Get the attachments (files) of a ticket.
 
@@ -618,12 +643,15 @@ class AsyncTickets:
                        Defaults to Filename, ContentType and ContentLength.
         :param files_only: Set to False to also return the other parts of messages, e.g. the text of a message
                            (see :py:meth:`search_attachments`).
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Status', '-Created']``.
         :returns: Iterator of attachments belonging to given ticket.
         :raises NotFoundError: If the ticket does not exist.
         :raises NotAllowedError: If the user is not allowed to see the ticket.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        get_params = _fields_params(fields, default_fields='Filename,ContentType,ContentLength')
+        self._t.warn_unknown_conditions(search_params, 'attachments', 'tickets.get_attachments')
+        get_params = {**_fields_params(fields, default_fields='Filename,ContentType,ContentLength'), **_order_params(order)}
 
         await self._check_ticket(ticket_id)
         async for item in self._t.paged_request(
@@ -639,6 +667,7 @@ class AsyncTickets:
         *,
         search_params: JSONSearchParams | None = None,
         files_only: bool = True,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[int]:
         """Get IDs of attachments for given ticket.
 
@@ -648,16 +677,20 @@ class AsyncTickets:
         :param ticket_id: ID of ticket
         :param search_params: Conditions of the search, see :py:meth:`get_attachments`.
         :param files_only: Set to False to also return the other parts of messages, see :py:meth:`get_attachments`.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Status', '-Created']``.
         :returns: Iterator of IDs (type int) of attachments belonging to given
                   ticket.
         :raises NotFoundError: If the ticket does not exist.
         :raises NotAllowedError: If the user is not allowed to see the ticket.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_conditions(search_params, 'attachments', 'tickets.get_attachments_ids')
         await self._check_ticket(ticket_id)
         async for item in self._t.paged_request(
             _path('ticket', ticket_id, 'attachments'),
             json_data=self._attachment_conditions(search_params, files_only=files_only),
+            params=_order_params(order),
         ):
             attachment_id = item.get('id')
             if not isinstance(attachment_id, (str, int)):
@@ -689,6 +722,7 @@ class AsyncTickets:
         search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         files_only: bool = True,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Search attachments across all tickets, e.g. files by name, content type or creation time.
 
@@ -713,10 +747,13 @@ class AsyncTickets:
                        Content in search results not base64 encoded, so binary content can not be represented
                        reliably. Do not request the field Parent, RT fails with HTTP status 500 for it (RT 6.0.4).
         :param files_only: Set to False to also return the other parts of messages, e.g. the text of a message.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Status', '-Created']``.
         :returns: Iterator of the found attachments.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        params = _fields_params(fields, default_fields='Filename,ContentType,ContentLength,TransactionId,Created')
+        self._t.warn_unknown_conditions(search_params, 'attachments', 'tickets.search_attachments')
+        params = {**_fields_params(fields, default_fields='Filename,ContentType,ContentLength,TransactionId,Created'), **_order_params(order)}
 
         async for item in self._t.paged_request('attachments', json_data=self._attachment_conditions(search_params, files_only=files_only), params=params):
             yield item

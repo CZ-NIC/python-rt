@@ -372,6 +372,20 @@ Python 3.11 or newer is required.
   always fails, as RT does not delete assets).
 - REST2 `custom_fields.create()` raises `InvalidUseError` if `Queue` is passed for a custom field which is not a ticket
   custom field, as RT would silently create a ticket custom field instead.
+- REST2 searches and lists can be sorted with `order` (a field name with `-` in front for descending order, or a
+  list of them, e.g. `order=['Status', '-Created']`): all `search()` methods, `tickets.history()`, `assets.history()`,
+  `articles.history()`, `tickets.get_attachments()`, `tickets.get_attachments_ids()`, `tickets.search_attachments()`,
+  `tickets.new_correspondence()`, `tickets.last_updated()`, `users.get_groups()`, `groups.get_members()`, `queues.all()`,
+  `catalogs.all()`, `classes.all()` and `custom_fields.get_values()`. `tickets.search()` and
+  `tickets.search_transactions()`, which supported a single field before, accept a list as well. Add `rt.common.SortOrder`.
+- REST2 `tickets.history()`, `assets.history()`, `articles.history()`, `queues.all()`, `catalogs.all()`, `classes.all()`,
+  `tickets.new_correspondence()` and `tickets.last_updated()` accept `fields`, and the history methods also accept
+  conditions in `search_params`, e.g. `tickets.history(1, search_params=[{'field': 'Type', 'value': 'Status'}])`.
+- REST2 logs a warning for field names which are not known to the library in `create()`/`edit()` (tickets, assets,
+  catalogs, groups, articles, classes, custom fields and their values) and in the conditions of searches
+  (`search_params`), as RT ignores unknown fields without any message (a search for users or groups with a condition on
+  an unknown field returns all of them). The fields are still sent to RT, which may support more fields than the
+  library knows. Users and queues still raise `InvalidUseError` for unknown fields.
 - Add `rt.exceptions.ConflictError`, which REST2 raises for HTTP status 409 (e.g. when granting a right which is
   already granted) with the message of RT. It is a subclass of `UnexpectedResponseError`, which was raised before,
   so existing code catching it keeps working.

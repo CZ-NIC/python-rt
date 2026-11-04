@@ -5,10 +5,13 @@ import typing
 
 from rt._rest2_async.transport import _AsyncTransport
 from rt.common import (
+    _GROUP_FIELDS,
     ActionResult,
     JSONInput,
     JSONSearchParams,
+    SortOrder,
     _fields_params,
+    _order_params,
     _path,
 )
 from rt.exceptions import (
@@ -53,6 +56,7 @@ class AsyncGroups:
         :raises NotAllowedError: If the user is not allowed to create groups.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _GROUP_FIELDS, 'groups.create')
         response = await self._t.send('POST', 'group', json_data={'Name': name, **kwargs})
 
         return int(self._t.created_id(self._t.dict_result(response)))
@@ -71,6 +75,7 @@ class AsyncGroups:
         :raises NotFoundError: If the group does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _GROUP_FIELDS, 'groups.edit')
         return self._t.result(self._t.list_result(await self._t.send('PUT', _path('group', group_id), json_data=kwargs)))
 
     async def delete(self, group_id: str | int) -> None:
@@ -91,6 +96,7 @@ class AsyncGroups:
         recursive: bool = False,
         users: bool = True,
         groups: bool = True,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Get the members of a group.
 
@@ -104,6 +110,8 @@ class AsyncGroups:
                           itself, and users which are members of several of the groups more than once.
         :param users: Set to False to not return users.
         :param groups: Set to False to not return groups.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the members.
         :raises InvalidUseError: If both *users* and *groups* are False.
         :raises NotFoundError: If the group does not exist.
@@ -112,7 +120,7 @@ class AsyncGroups:
         if not users and not groups:
             raise InvalidUseError('At least one of users and groups must be True.')
 
-        params: dict[str, str | int] = {}
+        params: dict[str, str | int | list[str]] = {**_order_params(order)}
         if recursive:
             params['recursively'] = 1
         if not users:
@@ -177,6 +185,7 @@ class AsyncGroups:
         search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         include_disabled: bool = False,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Search groups.
 
@@ -193,10 +202,14 @@ class AsyncGroups:
         :param fields: Fields returned for each group: a comma separated string or list of fields, or a dictionary
                        with query parameters as defined by RT. By default Name, Description and Disabled.
         :param include_disabled: Set to True to also return disabled groups.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the found groups.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        params: dict[str, str | int] = {
+        self._t.warn_unknown_conditions(search_params, 'groups', 'groups.search')
+        params: dict[str, str | int | list[str]] = {
+            **_order_params(order),
             **_fields_params(fields, default_fields='Name,Description,Disabled'),
             'find_disabled_rows': int(include_disabled),
         }

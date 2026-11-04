@@ -68,8 +68,11 @@ JSONValue: typing.TypeAlias = str | int | float | bool | None | list['JSONValue'
 # JSON data sent to RT. The read-only collection types also accept e.g. a ``dict[str, str]`` or ``list[str]``.
 JSONInput: typing.TypeAlias = str | int | float | bool | None | collections.abc.Sequence['JSONInput'] | collections.abc.Mapping[str, 'JSONInput']
 
-# Query parameters added to the URL of a request.
-QueryParams: typing.TypeAlias = collections.abc.Mapping[str, str | int]
+# Query parameters added to the URL of a request. A sequence of values repeats the parameter, e.g. ``orderby``.
+QueryParams: typing.TypeAlias = collections.abc.Mapping[str, str | int | collections.abc.Sequence[str]]
+
+# Sort order of a search: a field name with ``-`` in front for descending order, or a sequence of them.
+SortOrder: typing.TypeAlias = str | collections.abc.Sequence[str]
 
 # Conditions of a JSON search of REST2, e.g. ``[{'field': 'Name', 'operator': 'LIKE', 'value': 'Support'}]``.
 JSONSearchParams: typing.TypeAlias = collections.abc.Sequence[collections.abc.Mapping[str, JSONInput]]
@@ -251,6 +254,256 @@ def _search_fields_params(fields: SearchFormat | list[str] | dict[str, str]) -> 
 
     # 'i': only the IDs are returned
     return {}
+
+
+# --- field names known to the library ------------------------------------------------------------------------------
+# RT ignores unknown fields in a create or edit, and unknown fields of conditions of JSON searches, without any message.
+# The library warns about field names which are not in these sets (taken from RT 6.0.4: the writable or readable
+# attributes of the record classes, the roles, links and the keys handled by REST2), but sends them to RT as they are,
+# as newer versions of RT or extensions may support more fields. The fields of users and queues are checked strictly
+# instead, see _USER_FIELDS and _QUEUE_FIELDS.
+
+# Keys of links, e.g. DependsOn (replaces the links of the type), AddDependsOn and DeleteDependsOn (RT::Link::TYPEMAP).
+_LINK_KEYS = frozenset(
+    prefix + name
+    for name in (
+        'Parent',
+        'Parents',
+        'Child',
+        'Children',
+        'MemberOf',
+        'Members',
+        'HasMember',
+        'Member',
+        'RefersTo',
+        'ReferredToBy',
+        'DependsOn',
+        'DependedOnBy',
+    )
+    for prefix in ('', 'Add', 'Delete')
+)
+
+_TICKET_FIELDS = (
+    frozenset(
+        {
+            'Queue',
+            'Type',
+            'Subject',
+            'Description',
+            'Status',
+            'Owner',
+            'Requestor',
+            'Cc',
+            'AdminCc',
+            'Priority',
+            'InitialPriority',
+            'FinalPriority',
+            'TimeEstimated',
+            'TimeWorked',
+            'TimeLeft',
+            'TimeWorker',
+            'TimeWorkedDate',
+            'Starts',
+            'Started',
+            'Due',
+            'Resolved',
+            'Told',
+            'SLA',
+            'EffectiveId',
+            'IsMerged',
+            'SquelchMailTo',
+            'TransSquelchMailTo',
+            'Content',
+            'ContentType',
+            'Attachments',
+            'CustomFields',
+            'CustomRoles',
+            'MergeInto',
+        }
+    )
+    | _LINK_KEYS
+)
+
+_ASSET_FIELDS = frozenset({'Name', 'Description', 'Status', 'Catalog', 'Owner', 'HeldBy', 'Contact', 'CustomFields', 'CustomRoles'}) | _LINK_KEYS
+
+_CATALOG_FIELDS = frozenset({'Name', 'Description', 'Lifecycle', 'Disabled', 'Owner', 'HeldBy', 'Contact', 'CustomFields'})
+
+_GROUP_FIELDS = frozenset({'Name', 'Description', 'Domain', 'Instance', 'Disabled', 'CustomFields'}) | _LINK_KEYS
+
+_CLASS_FIELDS = frozenset({'Name', 'Description', 'SortOrder', 'Disabled', 'CustomFields'})
+
+_ARTICLE_FIELDS = frozenset({'Name', 'Summary', 'Class', 'Parent', 'SortOrder', 'Type', 'URI', 'Disabled', 'CustomFields'}) | _LINK_KEYS
+
+_CUSTOM_FIELD_FIELDS = frozenset(
+    {
+        'Name',
+        'Type',
+        'LookupType',
+        'Description',
+        'MaxValues',
+        'Pattern',
+        'EntryHint',
+        'ValidationHint',
+        'SortOrder',
+        'Disabled',
+        'BasedOn',
+        'CanonicalizeClass',
+        'RenderType',
+        'UniqueValues',
+        'ValuesClass',
+        'Queue',
+    }
+)
+
+_CUSTOM_FIELD_VALUE_FIELDS = frozenset({'Name', 'Description', 'Category', 'SortOrder', 'CustomField'})
+
+# Fields of conditions of JSON searches, by endpoint (the readable attributes, which RT uses as searchable fields).
+_COMMON_SEARCH_FIELDS = frozenset({'id', 'Created', 'Creator', 'LastUpdated', 'LastUpdatedBy'})
+_SEARCHABLE_FIELDS: dict[str, frozenset[str]] = {
+    'users': _COMMON_SEARCH_FIELDS
+    | {
+        'Name',
+        'EmailAddress',
+        'RealName',
+        'NickName',
+        'Organization',
+        'Gecos',
+        'Lang',
+        'Timezone',
+        'Comments',
+        'Signature',
+        'FreeformContactInfo',
+        'Address1',
+        'Address2',
+        'City',
+        'State',
+        'Zip',
+        'Country',
+        'HomePhone',
+        'WorkPhone',
+        'MobilePhone',
+        'PagerPhone',
+        'Image',
+        'ImageContentType',
+        'SMIMECertificate',
+        'TOTPEnrolled',
+    },
+    'groups': _COMMON_SEARCH_FIELDS | {'Name', 'Description'},
+    'queues': _COMMON_SEARCH_FIELDS
+    | {
+        'Name',
+        'Description',
+        'CorrespondAddress',
+        'CommentAddress',
+        'Lifecycle',
+        'SubjectTag',
+        'SortOrder',
+        'Disabled',
+        'SLADisabled',
+    },
+    'assets': _COMMON_SEARCH_FIELDS | {'Name', 'Description', 'Status', 'Catalog'},
+    'catalogs': _COMMON_SEARCH_FIELDS | {'Name', 'Description', 'Lifecycle', 'Disabled'},
+    'classes': _COMMON_SEARCH_FIELDS | {'Name', 'Description', 'SortOrder', 'Disabled'},
+    'articles': _COMMON_SEARCH_FIELDS | {'Name', 'Summary', 'Class', 'Parent', 'SortOrder', 'Type', 'URI', 'Disabled'},
+    'customfields': _COMMON_SEARCH_FIELDS
+    | {
+        'Name',
+        'Type',
+        'LookupType',
+        'Description',
+        'MaxValues',
+        'Pattern',
+        'EntryHint',
+        'ValidationHint',
+        'SortOrder',
+        'Disabled',
+        'BasedOn',
+        'CanonicalizeClass',
+        'RenderType',
+        'UniqueValues',
+        'ValuesClass',
+    },
+    'customroles': _COMMON_SEARCH_FIELDS | {'Name', 'Description', 'MaxValues', 'LookupType', 'EntryHint', 'Disabled'},
+    'customfieldvalues': _COMMON_SEARCH_FIELDS | {'Name', 'Description', 'Category', 'SortOrder', 'CustomField'},
+    'transactions': frozenset(
+        {
+            'id',
+            'Created',
+            'Creator',
+            'Type',
+            'Field',
+            'OldValue',
+            'NewValue',
+            'Data',
+            'TimeTaken',
+            'TimeWorker',
+            'TimeWorkedDate',
+            'ObjectType',
+            'ObjectId',
+            'ReferenceType',
+            'OldReference',
+            'NewReference',
+        }
+    ),
+    'attachments': frozenset(
+        {
+            'id',
+            'Created',
+            'Creator',
+            'TransactionId',
+            'Parent',
+            'MessageId',
+            'Subject',
+            'Filename',
+            'ContentType',
+            'ContentEncoding',
+            'Content',
+            'Headers',
+        }
+    ),
+}
+
+# Conditions on custom fields, e.g. CF.{Severity}, which RT handles separately (as in RT::REST2::Resource::Collection::QueryByJSON).
+_CUSTOM_FIELD_CONDITION = re.compile(r'(?:CF|CustomField)\.\{.+\}', re.IGNORECASE)
+
+
+def _unknown_fields(names: collections.abc.Iterable[str], known: frozenset[str], *, conditions: bool = False) -> list[str]:
+    """Return the field names which are not known to the library.
+
+    :param names: Field names of a create or edit, or of the conditions of a search.
+    :param known: The field names known to the library.
+    :param conditions: Set to True for the fields of conditions, which also include custom fields, e.g. ``CF.{Severity}``.
+    """
+    return [name for name in names if name not in known and not (conditions and _CUSTOM_FIELD_CONDITION.fullmatch(name))]
+
+
+def _order_params(order: SortOrder | None) -> dict[str, list[str]]:
+    """Return the query parameters sorting the results of a search.
+
+    RT sorts by each ``orderby`` parameter with the ``order`` parameter at the same position, so both are given for
+    each field, e.g. ``['Status', '-Created']`` gives ``orderby=Status&orderby=Created&order=ASC&order=DESC``.
+
+    :param order: A field name with ``-`` in front for descending order, or a sequence of them. ``None`` for the
+                  default order of RT.
+    :raises InvalidUseError: If a field name is empty.
+    """
+    if order is None:
+        return {}
+
+    names = []
+    directions = []
+    for item in [order] if isinstance(order, str) else order:
+        descending = item.startswith('-')
+        name = (item[1:] if descending else item).strip()
+        if not name:
+            raise InvalidUseError(f'Invalid sort order "{item}": a field name is required.')
+        names.append(name)
+        directions.append('DESC' if descending else 'ASC')
+
+    if not names:
+        raise InvalidUseError('The sort order must contain at least one field.')
+
+    return {'orderby': names, 'order': directions}
 
 
 def _fields_params(fields: str | list[str] | dict[str, str] | None, default_fields: str) -> dict[str, str]:

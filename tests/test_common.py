@@ -73,6 +73,28 @@ def test_fields_params():
     assert rt.common._fields_params({'fields': 'C'}, 'A,B') == {'fields': 'C'}
 
 
+def test_unknown_fields():
+    known = frozenset({'Status', 'Subject'})
+    assert rt.common._unknown_fields(['Status', 'Statu', 'subject'], known) == ['Statu', 'subject']
+    # conditions of searches may also be on custom fields, which RT handles itself
+    assert rt.common._unknown_fields(['CF.{Severity}', 'CustomField.{A b}', 'cf.{x}', 'CF.{}'], known, conditions=True) == ['CF.{}']
+    assert rt.common._unknown_fields(['CF.{Severity}'], known) == ['CF.{Severity}']
+    # the links and roles of tickets are known
+    assert rt.common._unknown_fields(['AddDependsOn', 'DeleteRefersTo', 'Requestor', 'CustomRoles'], rt.common._TICKET_FIELDS) == []
+
+
+def test_order_params():
+    assert rt.common._order_params(None) == {}
+    assert rt.common._order_params('Created') == {'orderby': ['Created'], 'order': ['ASC']}
+    assert rt.common._order_params('-Created') == {'orderby': ['Created'], 'order': ['DESC']}
+    # RT pairs each orderby with the order at the same position
+    assert rt.common._order_params(['Status', '-Created']) == {'orderby': ['Status', 'Created'], 'order': ['ASC', 'DESC']}
+    assert rt.common._order_params(('Name',)) == {'orderby': ['Name'], 'order': ['ASC']}
+    for invalid in ('', '-', ' ', [], ['Name', '']):
+        with pytest.raises(rt.exceptions.InvalidUseError):
+            rt.common._order_params(invalid)
+
+
 def test_quote_value():
     assert rt.common._quote_value('x') == "'x'"
     assert rt.common._quote_value(5) == "'5'"

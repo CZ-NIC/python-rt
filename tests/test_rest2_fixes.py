@@ -21,6 +21,7 @@ import httpx2
 import pytest
 
 import rt.exceptions
+from rt.common import _HISTORY_FIELDS
 from rt.rest2 import Rt
 
 from . import no_type_checks, random_string
@@ -154,7 +155,7 @@ def test_search_query_string():
         # RT replaces __CurrentUser__ with the user who executes the search
         "(Queue='General') AND (LastUpdatedBy!='__CurrentUser__')",
     ]
-    assert orders == [(None, None), ('Created', None), ('id', 'DESC'), ('LastUpdated', 'DESC')]
+    assert orders == [(None, None), ('Created', 'ASC'), ('id', 'DESC'), ('LastUpdated', 'DESC')]
 
     # a condition must not be given twice, the values could differ
     with pytest.raises(rt.exceptions.InvalidUseError, match='Status'):
@@ -380,6 +381,223 @@ def test_edit_link_failed(delete: bool, message: str, expected: type[rt.exceptio
 
     with pytest.raises(expected, match=message):
         _mock_client(handler).tickets.edit_link(1, 'DependsOn', 2, delete=delete)
+
+
+# --- order, fields and search_params of listing methods ---------------------------------------------------------
+
+_LISTING_METHODS = [
+    ('tickets', 'search', ()),
+    ('tickets', 'new_correspondence', ()),
+    ('tickets', 'last_updated', ('2024-01-01',)),
+    ('tickets', 'search_transactions', ()),
+    ('tickets', 'history', (1,)),
+    ('tickets', 'get_attachments', (1,)),
+    ('tickets', 'get_attachments_ids', (1,)),
+    ('tickets', 'search_attachments', ()),
+    ('users', 'search', ()),
+    ('users', 'get_groups', ('root',)),
+    ('groups', 'search', ()),
+    ('groups', 'get_members', (1,)),
+    ('queues', 'all', ()),
+    ('queues', 'search', ()),
+    ('assets', 'search', ()),
+    ('assets', 'history', (1,)),
+    ('catalogs', 'all', ()),
+    ('catalogs', 'search', ()),
+    ('articles', 'search', ()),
+    ('articles', 'history', (1,)),
+    ('classes', 'all', ()),
+    ('classes', 'search', ()),
+    ('custom_fields', 'search', ()),
+    ('custom_fields', 'get_values', (1,)),
+    ('custom_roles', 'search', ()),
+]
+
+
+def _listing_handler(requests: list[httpx2.Request]) -> typing.Callable[[httpx2.Request], httpx2.Response]:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == '/REST/2.0/ticket/1':
+            # the check of the ticket before its attachments are searched
+            return httpx2.Response(200, json={'id': 1})
+        requests.append(request)
+        return _page(1, [], pages=0)
+
+    return handler
+
+
+@pytest.mark.parametrize(('area', 'method', 'args'), _LISTING_METHODS)
+def test_listing_order(area: str, method: str, args: tuple):
+    requests: list[httpx2.Request] = []
+    client = _mock_client(_listing_handler(requests))
+    kwargs = {'search_params': [{'field': 'Type', 'value': 'Comment'}]} if method == 'search_transactions' else {}
+
+    _collect(getattr(getattr(client, area), method)(*args, order=['Status', '-Created'], **kwargs))
+
+    (request,) = requests
+    # RT pairs each orderby with the order at the same position
+    assert request.url.params.get_list('orderby') == ['Status', 'Created']
+    assert request.url.params.get_list('order') == ['ASC', 'DESC']
+
+    with pytest.raises(rt.exceptions.InvalidUseError):
+        _collect(getattr(getattr(client, area), method)(*args, order='-', **kwargs))
+
+
+@pytest.mark.parametrize(
+    ('area', 'method', 'args', 'default_fields'),
+    [
+        ('tickets', 'history', (1,), _HISTORY_FIELDS),
+        ('assets', 'history', (1,), _HISTORY_FIELDS),
+        ('articles', 'history', (1,), _HISTORY_FIELDS),
+        ('queues', 'all', (), 'Name,Description,CorrespondAddress,CommentAddress,InitialPriority,FinalPriority,DefaultDueIn'),
+        ('catalogs', 'all', (), 'Name,Description,Lifecycle,Disabled'),
+        ('classes', 'all', (), 'Name,Description,Disabled'),
+    ],
+)
+def test_listing_fields(area: str, method: str, args: tuple, default_fields: str):
+    requests: list[httpx2.Request] = []
+    client = _mock_client(_listing_handler(requests))
+    listing = getattr(getattr(client, area), method)
+
+    _collect(listing(*args))
+    _collect(listing(*args, fields=['Type', 'Created']))
+    _collect(listing(*args, fields={'fields[Creator]': 'Name'}))
+
+    assert [request.url.params['fields'] for request in requests] == [default_fields, 'Type,Created', default_fields]
+    assert requests[2].url.params['fields[Creator]'] == 'Name'
+    # without conditions, the listing is requested with GET as before
+    assert {request.method for request in requests} == {'GET'}
+
+
+@pytest.mark.parametrize(('area', 'args'), [('tickets', (1,)), ('assets', (1,)), ('articles', (1,))])
+def test_history_search_params(area: str, args: tuple):
+    requests: list[httpx2.Request] = []
+    client = _mock_client(_listing_handler(requests))
+    conditions = [{'field': 'Type', 'value': 'Status'}]
+
+    _collect(getattr(client, area).history(*args, search_params=conditions))
+
+    (request,) = requests
+    assert request.method == 'POST'
+    assert json.loads(request.content) == conditions
+    # the history keeps the fields and the creator details
+    assert request.url.params['fields'] == _HISTORY_FIELDS
+    assert request.url.params['fields[Creator]'] == 'id,Name,RealName,EmailAddress'
+
+
+@pytest.mark.parametrize(
+    ('area', 'method', 'args', 'known'),
+    [
+        ('tickets', 'create', ('General',), 'Subject'),
+        ('tickets', 'edit', (1,), 'Subject'),
+        ('assets', 'create', ('Laptop', 1), 'Description'),
+        ('assets', 'edit', (1,), 'Description'),
+        ('catalogs', 'create', ('Hardware',), 'Description'),
+        ('catalogs', 'edit', (1,), 'Description'),
+        ('groups', 'create', ('Staff',), 'Description'),
+        ('groups', 'edit', (1,), 'Description'),
+        ('articles', 'create', ('VPN', 1), 'Summary'),
+        ('articles', 'edit', (1,), 'Summary'),
+        ('classes', 'create', ('FAQ',), 'Description'),
+        ('classes', 'edit', (1,), 'Description'),
+        ('custom_fields', 'create', ('Severity', 'Select', 'RT::Queue-RT::Ticket'), 'Description'),
+        ('custom_fields', 'edit', (1,), 'Description'),
+        ('custom_fields', 'add_value', (1, 'High'), 'Description'),
+        ('custom_fields', 'edit_value', (1, 2), 'Description'),
+    ],
+)
+def test_unknown_fields_are_sent_with_warning(area: str, method: str, args: tuple, known: str, caplog: pytest.LogCaptureFixture):
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if request.method == 'POST':
+            return httpx2.Response(201, json={'id': 1, 'type': 'x', '_url': f'{RT_URL}x/1'})
+        return httpx2.Response(200, json=[])
+
+    client = _mock_client(handler)
+    with caplog.at_level(logging.WARNING, logger=Rt.__module__):
+        getattr(getattr(client, area), method)(*args, **{known: 'known'}, Descripton='typo')
+
+    # RT ignores unknown fields, newer versions of RT may know them: sent as they are, with a warning for the typo only
+    (request,) = requests
+    assert json.loads(request.content)['Descripton'] == 'typo'
+    (record,) = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert f'{area}.{method}' in record.getMessage()
+    assert record.getMessage().endswith(': Descripton')
+
+
+@pytest.mark.parametrize(
+    ('area', 'method', 'args'),
+    [
+        ('users', 'search', ()),
+        ('groups', 'search', ()),
+        ('queues', 'search', ()),
+        ('assets', 'search', ()),
+        ('catalogs', 'search', ()),
+        ('articles', 'search', ()),
+        ('classes', 'search', ()),
+        ('custom_fields', 'search', ()),
+        ('custom_roles', 'search', ()),
+        ('custom_fields', 'get_values', (1,)),
+        ('tickets', 'search_transactions', ()),
+        ('tickets', 'history', (1,)),
+        ('assets', 'history', (1,)),
+        ('articles', 'history', (1,)),
+        ('tickets', 'get_attachments', (1,)),
+        ('tickets', 'get_attachments_ids', (1,)),
+        ('tickets', 'search_attachments', ()),
+    ],
+)
+def test_unknown_condition_fields_are_sent_with_warning(area: str, method: str, args: tuple, caplog: pytest.LogCaptureFixture):
+    requests: list[httpx2.Request] = []
+    client = _mock_client(_listing_handler(requests))
+    conditions = [{'field': 'id', 'operator': '>', 'value': 0}, {'field': 'Nmae', 'value': 'x'}, {'field': 'CF.{Severity}', 'value': 'High'}]
+
+    with caplog.at_level(logging.WARNING, logger=Rt.__module__):
+        _collect(getattr(getattr(client, area), method)(*args, search_params=conditions))
+
+    # RT ignores conditions on fields it can not search: sent as they are, with a warning for the unknown field only
+    (request,) = requests
+    assert {'field': 'Nmae', 'value': 'x'} in json.loads(request.content)
+    (record,) = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert f'{area}.{method}' in record.getMessage()
+    assert record.getMessage().endswith(': Nmae')
+
+
+def test_listing_order_fields_and_conditions(rt_connection: Rt):
+    """RT sorts, selects fields and filters the listings as requested (only objects of this test are compared)."""
+    ticket_id = rt_connection.tickets.create(RT_QUEUE, subject=f'Listing {random_string()}', content='Test')
+    for number in range(3):
+        rt_connection.tickets.comment(ticket_id, f'Comment {number}')
+
+    ascending = [int(item['id']) for item in rt_connection.tickets.history(ticket_id)]
+    descending = [int(item['id']) for item in rt_connection.tickets.history(ticket_id, order='-id')]
+    assert len(ascending) >= 4
+    assert ascending == sorted(ascending)
+    assert descending == ascending[::-1]
+
+    comments = [item for item in rt_connection.tickets.history(ticket_id, search_params=[{'field': 'Type', 'value': 'Comment'}], fields=['Type'])]
+    assert [item['Type'] for item in comments] == ['Comment'] * 3
+    assert 'Creator' not in comments[0]
+
+    field_id = rt_connection.custom_fields.create(f'cf-{random_string()}', 'Select', 'RT::Queue-RT::Ticket')
+    for name in ('b', 'c', 'a'):
+        rt_connection.custom_fields.add_value(field_id, name)
+    assert [item['name'] for item in rt_connection.custom_fields.get_values(field_id, order='-Name')] == ['c', 'b', 'a']
+
+    user_name = f'user-{random_string()}'
+    rt_connection.users.create(user_name, f'{user_name}@example.com')
+    group_ids = [rt_connection.groups.create(f'group-{random_string()}') for _ in range(3)]
+    for group_id in group_ids:
+        rt_connection.users.add_to_group(user_name, group_id)
+    assert [int(item['id']) for item in rt_connection.users.get_groups(user_name, order='-id')] == sorted(group_ids, reverse=True)
+
+    prefix = f'listing-{random_string()}'
+    class_ids = [rt_connection.classes.create(f'{prefix}-{number}') for number in range(3)]
+    found = [int(item['id']) for item in rt_connection.classes.all(order='-Name', fields=['Name']) if str(item.get('Name', '')).startswith(prefix)]
+    assert found == class_ids[::-1]
+    searched = rt_connection.classes.search(search_params=[{'field': 'Name', 'operator': 'LIKE', 'value': prefix}], order='-id')
+    assert [int(item['id']) for item in searched] == class_ids[::-1]
 
 
 # --- fields of linked objects in get() ---------------------------------------------------------------------------

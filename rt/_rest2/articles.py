@@ -7,10 +7,15 @@ import typing
 
 from rt._rest2.transport import _Transport
 from rt.common import (
+    _ARTICLE_FIELDS,
+    _CLASS_FIELDS,
     _HISTORY_FIELDS,
     ActionResult,
     JSONInput,
     JSONSearchParams,
+    SortOrder,
+    _fields_params,
+    _order_params,
     _path,
 )
 
@@ -61,6 +66,7 @@ class Articles:
                                  exist (RT returns status code 403 for both).
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _ARTICLE_FIELDS, 'articles.create')
         response = self._t.send('POST', 'article', json_data={'Name': name, 'Class': class_id, **kwargs})
 
         return int(self._t.created_id(self._t.dict_result(response)))
@@ -81,6 +87,7 @@ class Articles:
         :raises NotFoundError: If the article does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _ARTICLE_FIELDS, 'articles.edit')
         return self._t.result(self._t.list_result(self._t.send('PUT', _path('article', article_id), json_data=kwargs)))
 
     def delete(self, article_id: str | int) -> None:
@@ -96,22 +103,38 @@ class Articles:
         """
         self._t.delete(_path('article', article_id))
 
-    def history(self, article_id: str | int) -> collections.abc.Iterator[dict[str, typing.Any]]:
+    def history(
+        self,
+        article_id: str | int,
+        *,
+        search_params: JSONSearchParams | None = None,
+        fields: str | list[str] | dict[str, str] | None = None,
+        order: SortOrder | None = None,
+    ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Get the history of an article.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param article_id: ID of the article.
+        :param search_params: Conditions of the search as described for :py:meth:`~Assets.search`, e.g. only
+                              the changes of the summary: ``[{'field': 'Field', 'value': 'Summary'}]``.
+        :param fields: Fields returned for each transaction: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT, e.g. ``{'fields[Creator]': 'Name'}``. Defaults to the fields of :py:meth:`~Tickets.history`.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``. Default: oldest first.
         :returns: Iterator of transactions, each a dictionary with the same keys as for
                   :py:meth:`~Tickets.history`. Empty if the article does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_conditions(search_params, 'transactions', 'articles.history')
         for transaction in self._t.paged_request(
             _path('article', article_id, 'history'),
+            json_data=list(search_params) if search_params else None,
             params={
-                'fields': _HISTORY_FIELDS,
                 'fields[Creator]': 'id,Name,RealName,EmailAddress',
+                **_fields_params(fields, default_fields=_HISTORY_FIELDS),
+                **_order_params(order),
             },
         ):
             yield transaction
@@ -122,6 +145,7 @@ class Articles:
         search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         include_disabled: bool = False,
+        order: SortOrder | None = None,
     ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Search articles.
 
@@ -138,10 +162,14 @@ class Articles:
         :param fields: Fields returned for each article: a comma separated string or list of fields, or a dictionary
                        with query parameters as defined by RT. By default Name, Summary, Class and Disabled.
         :param include_disabled: Set to True to also return disabled (deleted) articles.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the found articles.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        for item in self._t.search_objects('articles', search_params, fields, 'Name,Summary,Class,Disabled', include_disabled=include_disabled):
+        for item in self._t.search_objects(
+            'articles', search_params, fields, 'Name,Summary,Class,Disabled', include_disabled=include_disabled, order=order, method='articles.search'
+        ):
             yield item
 
 
@@ -154,18 +182,32 @@ class Classes:
     def __init__(self, transport: _Transport) -> None:
         self._t = transport
 
-    def all(self, *, include_disabled: bool = False) -> collections.abc.Iterator[dict[str, typing.Any]]:
+    def all(
+        self,
+        *,
+        include_disabled: bool = False,
+        fields: str | list[str] | dict[str, str] | None = None,
+        order: SortOrder | None = None,
+    ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Get all classes of articles which the user can see.
 
         .. note:: Requires RT 5.0.1 or newer. RT 5.0.0 answers with HTTP status 404, i.e.
                   :py:exc:`~rt.exceptions.NotFoundError` is raised.
 
         :param include_disabled: Set to True to also return disabled classes.
+        :param fields: Fields returned for each class: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT, e.g. ``{'fields[Creator]': 'Name'}``. Defaults to the fields listed below.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the classes, each a dictionary with the keys id, type, _url, Name, Description and
                   Disabled.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        params: dict[str, str | int] = {'fields': 'Name,Description,Disabled', 'find_disabled_rows': int(include_disabled)}
+        params: dict[str, str | int | list[str]] = {
+            **_fields_params(fields, default_fields='Name,Description,Disabled'),
+            **_order_params(order),
+            'find_disabled_rows': int(include_disabled),
+        }
 
         for item in self._t.paged_request('classes/all', params=params):
             yield item
@@ -201,6 +243,7 @@ class Classes:
         :raises NotAllowedError: If the user is not allowed to create classes.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _CLASS_FIELDS, 'classes.create')
         response = self._t.send('POST', 'class', json_data={'Name': name, **kwargs})
 
         return int(self._t.created_id(self._t.dict_result(response)))
@@ -220,6 +263,7 @@ class Classes:
         :raises NotFoundError: If the class does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_fields(kwargs, _CLASS_FIELDS, 'classes.edit')
         return self._t.result(self._t.list_result(self._t.send('PUT', _path('class', class_id), json_data=kwargs)))
 
     def delete(self, class_id: str | int) -> None:
@@ -240,6 +284,7 @@ class Classes:
         search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         include_disabled: bool = False,
+        order: SortOrder | None = None,
     ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Search classes of articles.
 
@@ -251,8 +296,12 @@ class Classes:
         :param fields: Fields returned for each class: a comma separated string or list of fields, or a dictionary
                        with query parameters as defined by RT. By default Name, Description and Disabled.
         :param include_disabled: Set to True to also return disabled classes.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the found classes.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        for item in self._t.search_objects('classes', search_params, fields, 'Name,Description,Disabled', include_disabled=include_disabled):
+        for item in self._t.search_objects(
+            'classes', search_params, fields, 'Name,Description,Disabled', include_disabled=include_disabled, order=order, method='classes.search'
+        ):
             yield item

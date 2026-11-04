@@ -9,8 +9,10 @@ from rt.common import (
     ActionResult,
     JSONInput,
     JSONSearchParams,
+    SortOrder,
     _check_fields,
     _fields_params,
+    _order_params,
     _path,
     _refusal_error,
 )
@@ -150,17 +152,19 @@ class AsyncUsers:
         """
         await self._t.delete(_path('user', user_id))
 
-    async def get_groups(self, user_id: str | int) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+    async def get_groups(self, user_id: str | int, *, order: SortOrder | None = None) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Get the groups which a user is a direct member of.
 
         .. note:: Requires RT 5.0.0 or newer.
 
         :param user_id: Identification of the user by name (str) or ID (int).
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the groups, each a dictionary with the keys id, type and _url. Empty if the user does not
                   exist (RT does not report it).
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        async for item in self._t.paged_request(_path('user', user_id, 'groups')):
+        async for item in self._t.paged_request(_path('user', user_id, 'groups'), params=_order_params(order)):
             yield item
 
     async def add_to_group(self, user_id: str | int, group_id: str | int) -> ActionResult:
@@ -226,6 +230,7 @@ class AsyncUsers:
         privileged: bool | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         include_disabled: bool = False,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Search users.
 
@@ -242,15 +247,19 @@ class AsyncUsers:
         :param fields: Fields returned for each user: a comma separated string or list of fields, or a dictionary
                        with query parameters as defined by RT. By default Name, RealName, EmailAddress and Disabled.
         :param include_disabled: Set to True to also return disabled users.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the found users.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
+        self._t.warn_unknown_conditions(search_params, 'users', 'users.search')
         if privileged is None:
             selector = 'users'
         else:
             selector = _path('users', 'privileged' if privileged else 'unprivileged')
 
-        params: dict[str, str | int] = {
+        params: dict[str, str | int | list[str]] = {
+            **_order_params(order),
             **_fields_params(fields, default_fields='Name,RealName,EmailAddress,Disabled'),
             'find_disabled_rows': int(include_disabled),
         }

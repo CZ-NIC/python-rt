@@ -9,7 +9,10 @@ from rt.common import (
     ActionResult,
     JSONInput,
     JSONSearchParams,
+    SortOrder,
     _check_fields,
+    _fields_params,
+    _order_params,
     _path,
 )
 
@@ -89,7 +92,13 @@ class AsyncQueues:
         """
         return self._t.dict_result(await self._t.send('GET', _path('queue', queue_id), params=fields))
 
-    async def all(self, *, include_disabled: bool = False) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+    async def all(
+        self,
+        *,
+        include_disabled: bool = False,
+        fields: str | list[str] | dict[str, str] | None = None,
+        order: SortOrder | None = None,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Return a list of all queues.
 
         Example of a return result:
@@ -114,13 +123,19 @@ class AsyncQueues:
         .. note:: Requires RT 5.0.0 or newer.
 
         :param include_disabled: Set to True to also return disabled queues.
+        :param fields: Fields returned for each queue: a comma separated string or list of fields, or a dictionary
+                       with query parameters as defined by RT, e.g. ``{'fields[Creator]': 'Name'}``. Defaults to Name, Description, CorrespondAddress, CommentAddress, InitialPriority,
+                       FinalPriority and DefaultDueIn.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
 
         :returns: Iterator of dictionaries containing basic information on all queues.
 
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        params: dict[str, str | int] = {
-            'fields': 'Name,Description,CorrespondAddress,CommentAddress,InitialPriority,FinalPriority,DefaultDueIn',
+        params: dict[str, str | int | list[str]] = {
+            **_fields_params(fields, default_fields='Name,Description,CorrespondAddress,CommentAddress,InitialPriority,FinalPriority,DefaultDueIn'),
+            **_order_params(order),
             'find_disabled_rows': int(include_disabled),
         }
         async for item in self._t.paged_request('queues/all', params=params):
@@ -195,6 +210,7 @@ class AsyncQueues:
         search_params: JSONSearchParams | None = None,
         fields: str | list[str] | dict[str, str] | None = None,
         include_disabled: bool = False,
+        order: SortOrder | None = None,
     ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
         """Search queues.
 
@@ -213,8 +229,12 @@ class AsyncQueues:
         :param fields: Fields returned for each queue: a comma separated string or list of fields, or a dictionary
                        with query parameters as defined by RT. By default Name, Description, Lifecycle and Disabled.
         :param include_disabled: Set to True to also return disabled queues.
+        :param order: Field to sort by, with ``-`` in front for descending order, e.g. ``'-Created'``, or a list of
+                      them, e.g. ``['Name', '-id']``.
         :returns: Iterator of the found queues.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        async for item in self._t.search_objects('queues', search_params, fields, 'Name,Description,Lifecycle,Disabled', include_disabled=include_disabled):
+        async for item in self._t.search_objects(
+            'queues', search_params, fields, 'Name,Description,Lifecycle,Disabled', include_disabled=include_disabled, order=order, method='queues.search'
+        ):
             yield item

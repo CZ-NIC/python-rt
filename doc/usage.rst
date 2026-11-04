@@ -69,6 +69,20 @@ Use ``list()`` to get all results at once::
 Searches and lists return a few fields of each object by default; other fields are selected with ``fields``, e.g.
 ``fields=['Name', 'Description']``, or with a dictionary of query parameters as defined by RT, which also allows to
 return fields of linked objects, e.g. ``fields={'fields': 'Owner', 'fields[Owner]': 'Name,EmailAddress'}``.
+The lists of the members of a group, the groups of a user and the values of a custom field have no ``fields``, as RT
+always returns the same few fields for them.
+
+Searches and lists are sorted with ``order``: a field name, with ``-`` in front for descending order, or a list of
+them; without it, RT uses its default order::
+
+    c.queues.all(order='Name')
+    c.tickets.search(queue='General', order=['Status', '-Created'])
+    c.tickets.history(ticket_id, order='-Created')
+
+Searches take their conditions in ``search_params`` (TicketSQL conditions for ``tickets.search()``, see below), and
+so does the history of tickets, assets and articles, e.g. only the changes of the status::
+
+    c.tickets.history(ticket_id, search_params=[{'field': 'Type', 'value': 'Status'}])
 
 Results of changes
 ------------------
@@ -151,6 +165,25 @@ and ``response_message``::
         print('No such ticket')
     except rt.exceptions.InvalidUseError as exc:
         print(f'RT refused: {exc}')  # e.g. "You already own this ticket"
+
+
+Unknown Field Names
+```````````````````
+RT ignores fields it does not know without any message: unknown fields in ``create()`` and ``edit()``, conditions on
+fields it can not search in ``search_params`` (the search then finds more objects than intended, for users and groups
+even all of them), and unknown names in ``fields`` (returned with an empty value).
+
+The library knows the fields of RT 6.0, but newer versions of RT or extensions may support more. So it sends field
+names it does not know to RT as they are, and logs a warning on the logger of the client (``rt.rest2`` or
+``rt.rest2_async``), e.g. for a typo::
+
+    c.tickets.edit(ticket_id, Statu='resolved')
+    # WARNING tickets.edit: field(s) not known to the library, sent to RT as they are (RT ignores fields it does not know): Statu
+
+The fields of users and queues are a closed set, so ``users.create()``, ``users.edit()``, ``queues.create()`` and
+``queues.edit()`` raise :py:exc:`~rt.exceptions.InvalidUseError` for unknown fields instead. Custom fields are passed in
+``CustomFields`` (and searched with ``CF.{name}``), so they are never reported. The names in ``fields`` are not checked,
+as RT also returns computed fields which are no fields of the objects (e.g. ``ContentLength`` of attachments).
 
 
 Tickets

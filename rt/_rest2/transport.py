@@ -15,6 +15,7 @@ import httpx2
 
 from rt.common import (
     _REDACTED_HEADERS,
+    _SEARCHABLE_FIELDS,
     VALID_TICKET_LINK_NAMES,
     ActionResult,
     Attachment,
@@ -22,10 +23,13 @@ from rt.common import (
     JSONSearchParams,
     JSONValue,
     QueryParams,
+    SortOrder,
     TicketLinkName,
     _fields_params,
     _message_error_type,
+    _order_params,
     _path,
+    _unknown_fields,
 )
 from rt.exceptions import (
     AuthorizationError,
@@ -327,6 +331,45 @@ class _Transport:
 
         return messages
 
+    def warn_unknown_fields(self, fields: collections.abc.Iterable[str], known: frozenset[str], method: str) -> None:
+        """Log a warning for field names of a create or edit which are not known to the library.
+
+        The fields are sent to RT as they are: newer versions of RT or extensions may support them. RT ignores fields
+        it does not know without any message.
+
+        :param fields: The names of the fields to set.
+        :param known: The field names known to the library.
+        :param method: Name of the method, for the message, e.g. ``tickets.edit``.
+        """
+        unknown = _unknown_fields(fields, known)
+        if unknown:
+            self.logger.warning(
+                '%s: field(s) not known to the library, sent to RT as they are (RT ignores fields it does not know): %s',
+                method,
+                ', '.join(unknown),
+            )
+
+    def warn_unknown_conditions(self, search_params: JSONSearchParams | None, collection: str, method: str) -> None:
+        """Log a warning for fields of search conditions which are not known to the library.
+
+        RT ignores conditions on fields it can not search, so the search may return more objects than intended (for
+        users and groups even all of them). The conditions are sent to RT as they are: newer versions of RT may
+        support more fields.
+
+        :param search_params: The conditions of the search.
+        :param collection: The endpoint of the search, e.g. ``users``, which selects the known fields.
+        :param method: Name of the method, for the message, e.g. ``users.search``.
+        """
+        names = [condition['field'] for condition in search_params or [] if isinstance(condition.get('field'), str)]
+        unknown = _unknown_fields(typing.cast('list[str]', names), _SEARCHABLE_FIELDS[collection], conditions=True)
+        if unknown:
+            self.logger.warning(
+                '%s: condition(s) on field(s) not known to the library, sent to RT as they are (RT ignores conditions on fields '
+                'it can not search, so more objects may be found): %s',
+                method,
+                ', '.join(unknown),
+            )
+
     def result(self, messages: list[str]) -> ActionResult:
         """Log the status messages of RT for a change which RT may have applied only partly and return the result."""
         self.logger.debug('RT status messages: %s', messages)
@@ -473,6 +516,8 @@ class _Transport:
         default_fields: str,
         *,
         include_disabled: bool = False,
+        order: SortOrder | None = None,
+        method: str,
     ) -> collections.abc.Iterator[dict[str, typing.Any]]:
         """Search objects with a JSON search, e.g. queues or classes.
 
@@ -482,14 +527,18 @@ class _Transport:
         :param fields: Fields returned for each object, see :py:meth:`~Assets.search`.
         :param default_fields: Fields returned if *fields* is not specified.
         :param include_disabled: Set to True to also return disabled objects.
+        :param order: Sort order, e.g. ``'-Created'`` or ``['Status', '-Created']``.
+        :param method: Name of the calling method, for the warning about unknown fields, e.g. ``queues.search``.
         :returns: Iterator of the found objects.
         """
+        self.warn_unknown_conditions(search_params, selector, method)
         conditions = list(search_params or [])
         if not conditions:
             conditions = [{'field': 'id', 'operator': '>', 'value': 0}]
 
-        params: dict[str, str | int] = {
+        params: dict[str, str | int | list[str]] = {
             **_fields_params(fields, default_fields=default_fields),
+            **_order_params(order),
             'find_disabled_rows': int(include_disabled),
         }
 

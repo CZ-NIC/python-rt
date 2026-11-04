@@ -23,12 +23,12 @@ Python 3.11 or newer is required.
   valid JSON.
 - REST2 raises `rt.exceptions.NotAllowedError` instead of `UnexpectedResponseError` if RT answers with HTTP status 403,
   i.e. if the user does not have the rights for a request, and instead of `BadRequestError` if RT answers with
-  HTTP status 400 and "Permission Denied" (`reply()` and `comment()` without the right to add messages).
+  HTTP status 400 and "Permission Denied" (`tickets.reply()` and `tickets.comment()` without the right to add messages).
 - REST2 raises `rt.exceptions.InvalidUseError` instead of `ValueError` for invalid arguments. `InvalidUseError` is a
   subclass of `ValueError`, so `except ValueError` keeps working.
 
 #### REST1
-- Pass all constructor arguments by keyword, as well as `cc`, `bcc`, `content_type` and `files` of `reply()`/`comment()`:
+- Pass all constructor arguments by keyword, as well as `cc`, `bcc`, `content_type` and `files` of `tickets.reply()`/`tickets.comment()`:
   ```python
   # before
   tracker = rt.rest1.Rt('https://rt.example.com/REST/1.0/', 'user', 'password')
@@ -48,6 +48,33 @@ Python 3.11 or newer is required.
   after 20 seconds (`http_timeout=None` disables the timeout) and files to attach must be bytes or binary file objects.
 
 #### REST2
+- The methods of the REST2 clients are grouped by the kind of object in attributes of the client: `tracker.tickets`, `tracker.users`,
+  `tracker.groups`, `tracker.queues`, `tracker.assets`, `tracker.catalogs`, `tracker.articles`, `tracker.classes`,
+  `tracker.custom_fields`, `tracker.custom_roles` and `tracker.rights`. The names lose the name of the object, and there are no
+  aliases of the old names. `get_system_info()`, `close()`/`aclose()` and the context manager stay on the client.
+  ```python
+  # before
+  ticket = tracker.get_ticket(1)
+  tracker.edit_user('alice', RealName='Alice')
+  # after
+  ticket = tracker.tickets.get(1)
+  tracker.users.edit('alice', RealName='Alice')
+  ```
+  Old name → new name, in the attribute of the client given in the first column (names which stay the same are listed without arrow):
+
+  | Attribute | Methods |
+  |---|---|
+  | `tickets` | `new_correspondence()`, `last_updated()`, `get_ticket()` → `get()`, `create_ticket()` → `create()`, `edit_ticket()` → `edit()`, `delete_ticket()` → `delete()`, `search()`, `get_ticket_history()` → `history()`, `get_transaction()`, `search_transactions()`, `get_ticket_messages()` → `messages()`, `reply()`, `comment()`, `get_attachments()`, `get_attachments_ids()`, `get_attachment()`, `search_attachments()`, `get_links()`, `edit_link()`, `merge_ticket()` → `merge()`, `take()`, `untake()`, `steal()` |
+  | `users` | `get_user()` → `get()`, `user_exists()` → `exists()`, `create_user()` → `create()`, `edit_user()` → `edit()`, `delete_user()` → `delete()`, `get_user_groups()` → `get_groups()`, `add_user_to_group()` → `add_to_group()`, `remove_user_from_group()` → `remove_from_group()`, `remove_user_from_all_groups()` → `remove_from_all_groups()`, `search_users()` → `search()` |
+  | `groups` | `get_group()` → `get()`, `create_group()` → `create()`, `edit_group()` → `edit()`, `delete_group()` → `delete()`, `get_group_members()` → `get_members()`, `add_group_member()` → `add_member()`, `remove_group_member()` → `remove_member()`, `remove_all_group_members()` → `remove_all_members()`, `search_groups()` → `search()` |
+  | `queues` | `get_queue()` → `get()`, `get_all_queues()` → `all()`, `edit_queue()` → `edit()`, `create_queue()` → `create()`, `delete_queue()` → `delete()`, `search_queues()` → `search()` |
+  | `assets` | `get_asset()` → `get()`, `create_asset()` → `create()`, `edit_asset()` → `edit()`, `delete_asset()` → `delete()`, `get_asset_history()` → `history()`, `search_assets()` → `search()`, `get_asset_links()` → `get_links()`, `edit_asset_link()` → `edit_link()` |
+  | `catalogs` | `get_catalog()` → `get()`, `get_all_catalogs()` → `all()`, `create_catalog()` → `create()`, `edit_catalog()` → `edit()`, `delete_catalog()` → `delete()`, `search_catalogs()` → `search()` |
+  | `articles` | `get_article()` → `get()`, `create_article()` → `create()`, `edit_article()` → `edit()`, `delete_article()` → `delete()`, `get_article_history()` → `history()`, `search_articles()` → `search()` |
+  | `classes` | `get_all_classes()` → `all()`, `get_class()` → `get()`, `create_class()` → `create()`, `edit_class()` → `edit()`, `delete_class()` → `delete()`, `search_classes()` → `search()` |
+  | `custom_fields` | `get_custom_field()` → `get()`, `create_custom_field()` → `create()`, `edit_custom_field()` → `edit()`, `delete_custom_field()` → `delete()`, `get_custom_field_applies_to()` → `get_applies_to()`, `apply_custom_field()` → `apply()`, `unapply_custom_field()` → `unapply()`, `get_custom_field_values()` → `get_values()`, `get_custom_field_value()` → `get_value()`, `add_custom_field_value()` → `add_value()`, `edit_custom_field_value()` → `edit_value()`, `delete_custom_field_value()` → `delete_value()`, `get_custom_field_file()` → `get_file()`, `search_custom_fields()` → `search()` |
+  | `custom_roles` | `get_custom_role()` → `get()`, `search_custom_roles()` → `search()` |
+  | `rights` | `get_rights()` → `get()`, `get_available_rights()` → `get_available()`, `grant_right()` → `grant()`, `revoke_right()` → `revoke()` |
 - Import `AsyncRt` from `rt.rest2_async` and pass all constructor arguments by keyword (also for `Rt`):
   ```python
   # before
@@ -56,75 +83,75 @@ Python 3.11 or newer is required.
   import rt.rest2_async
   tracker = rt.rest2_async.AsyncRt(url='https://rt.example.com/REST/2.0/', http_auth=httpx2.BasicAuth('user', 'password'))
   ```
-- The sync `get_ticket_history()`, `get_attachments()`, `get_attachments_ids()` and `get_all_queues()` return iterators
+- The sync `tickets.history()`, `tickets.get_attachments()`, `tickets.get_attachments_ids()` and `queues.all()` return iterators
   instead of lists; wrap them in `list()` if a list is needed:
   ```python
-  history = list(tracker.get_ticket_history(ticket_id))
+  history = list(tracker.tickets.history(ticket_id))
   ```
-- The async `new_correspondence()` and `last_updated()` are iterated without `await`:
+- The async `tickets.new_correspondence()` and `tickets.last_updated()` are iterated without `await`:
   ```python
   # before
   async for ticket in await tracker.last_updated('2024-01-01'): ...
   # after
-  async for ticket in tracker.last_updated('2024-01-01'): ...
+  async for ticket in tracker.tickets.last_updated('2024-01-01'): ...
   ```
-- `search()` quotes and escapes all values, so remove any manual escaping of quotes in values (`raw_query` is still
+- `tickets.search()` quotes and escapes all values, so remove any manual escaping of quotes in values (`raw_query` is still
   passed to RT as is). Unknown operator suffixes (e.g. `Subject__likee`) raise `InvalidUseError`, and a field name
   containing `__` needs an explicit operator, e.g. `CF_my__field__exact='value'`.
-- `reply()` and `comment()` raise `InvalidUseError` for a `content_type` other than `text/plain` or `text/html`.
+- `tickets.reply()` and `tickets.comment()` raise `InvalidUseError` for a `content_type` other than `text/plain` or `text/html`.
 - `http_auth` and `token` can not be combined anymore.
-- Pass all optional arguments by keyword, e.g. `queue` of `search()`/`last_updated()`, `delete` of `edit_link()`,
-  `privileged` of `user_exists()` and all arguments of `search_assets()`. Only `content` of `reply()`/`comment()` can
+- Pass all optional arguments by keyword, e.g. `queue` of `tickets.search()`/`tickets.last_updated()`, `delete` of `tickets.edit_link()`,
+  `privileged` of `users.exists()` and all arguments of `assets.search()`. Only `content` of `tickets.reply()`/`tickets.comment()` can
   still be passed by position:
   ```python
   # before
   tracker.search_assets(1, [{'field': 'Name', 'value': 'Laptop'}])
   tracker.create_ticket('General', 'text/plain', 'Subject')
   # after
-  tracker.search_assets(catalog_id=1, search_params=[{'field': 'Name', 'value': 'Laptop'}])
-  tracker.create_ticket('General', subject='Subject')
+  tracker.assets.search(catalog_id=1, search_params=[{'field': 'Name', 'value': 'Laptop'}])
+  tracker.tickets.create('General', subject='Subject')
   ```
-- The parameter `query_format` of `search()`, `get_ticket()`, `get_asset()`, `get_attachments()` and `search_assets()`
-  was renamed to `fields`. A remaining `query_format=` in `search()` is sent to RT as search condition, which RT rejects
+- The parameter `query_format` of `tickets.search()`, `tickets.get()`, `assets.get()`, `tickets.get_attachments()` and `assets.search()`
+  was renamed to `fields`. A remaining `query_format=` in `tickets.search()` is sent to RT as search condition, which RT rejects
   with `BadRequestError: Unknown field: query_format`.
-- All methods changing something return an `ActionResult` instead of a `bool`: `edit_ticket()` and the other `edit_*()`,
-  `reply()`, `comment()`, `take()`, `untake()`, `steal()`, `merge_ticket()`, `edit_link()`, `edit_asset_link()`,
-  `add_user_to_group()`, `add_group_member()` and `apply_custom_field()`. RT answers with HTTP status 200 and status
+- All methods changing something return an `ActionResult` instead of a `bool`: `tickets.edit()` and the other `edit_*()`,
+  `tickets.reply()`, `tickets.comment()`, `tickets.take()`, `tickets.untake()`, `tickets.steal()`, `tickets.merge()`, `tickets.edit_link()`, `assets.edit_link()`,
+  `users.add_to_group()`, `groups.add_member()` and `custom_fields.apply()`. RT answers with HTTP status 200 and status
   messages also if it refused all or a part of a request (verified with RT 5.0 and 6.0: accepted fields are changed,
   refused ones are reported only as message). The `ActionResult` is **true whenever RT executed the request**, so
-  `if tracker.comment(...)` keeps working; `result.complete`, `result.refused`, `result.unrecognized` and
+  `if tracker.tickets.comment(...)` keeps working; `result.complete`, `result.refused`, `result.unrecognized` and
   `result.messages` give the details, and `result.raise_for_refused()` raises `NotFoundError`, `NotAllowedError` or
   `InvalidUseError` for refused parts. The messages are classified with a catalog of the messages of RT
   (`rt/_messages.py`); a message which is not in the catalog (newer RT, other language) is listed in
-  `result.unrecognized` and does not raise for `edit_*()`, `reply()` and `comment()`. `take()`, `untake()`, `steal()`,
-  `merge_ticket()`, `edit_link()`, `edit_asset_link()` and `add_group_member()` raise `UnexpectedResponseError` for it,
+  `result.unrecognized` and does not raise for `edit_*()`, `tickets.reply()` and `tickets.comment()`. `tickets.take()`, `tickets.untake()`, `tickets.steal()`,
+  `tickets.merge()`, `tickets.edit_link()`, `assets.edit_link()` and `groups.add_member()` raise `UnexpectedResponseError` for it,
   as the message is the only information about their result. Code checking the result with `is True` must be changed.
   Refused parts of `edit_*()` are not raised anymore (before, only a nonexistent user or queue was).
   The methods changing one thing raise an exception if RT refuses the change (nothing was changed):
 
   | Method | Before | After |
   |---|---|---|
-  | `take()`, `untake()`, `steal()` | `False` if RT refused | `InvalidUseError` (or `NotAllowedError` for "Permission Denied") if RT refused |
-  | `merge_ticket()` | `False` if RT refused | `NotFoundError` if the destination ticket does not exist, else `InvalidUseError`/`NotAllowedError` |
-  | `edit_link()` | `True` if RT could not create or delete the link | `InvalidUseError`, e.g. for a link from a ticket to itself |
+  | `tickets.take()`, `tickets.untake()`, `tickets.steal()` | `False` if RT refused | `InvalidUseError` (or `NotAllowedError` for "Permission Denied") if RT refused |
+  | `tickets.merge()` | `False` if RT refused | `NotFoundError` if the destination ticket does not exist, else `InvalidUseError`/`NotAllowedError` |
+  | `tickets.edit_link()` | `True` if RT could not create or delete the link | `InvalidUseError`, e.g. for a link from a ticket to itself |
 
   ```python
   # before
   if not tracker.take(ticket_id): ...
   # after
   try:
-      tracker.take(ticket_id)
+      tracker.tickets.take(ticket_id)
   except rt.exceptions.InvalidUseError: ...
   ```
   RT localizes its messages and gives no other indication of success or failure, so the library recognizes the English
   messages only: **the language of the user of the API must be set to English in RT**, see the usage guide.
 - `rt.common.REGEX_PATTERNS` was removed (not used anymore; the messages of RT are recognized by the library itself).
-- `new_correspondence()` only returns tickets last updated by other users than the one of the connection, as documented
+- `tickets.new_correspondence()` only returns tickets last updated by other users than the one of the connection, as documented
   (before, it returned all tickets).
 - The type aliases `TYPE_VALID_TICKET_LINK_NAMES` and `TYPE_CONTENT_TYPE` were renamed to `TicketLinkName` and `ContentType`.
 - `Attachment` is immutable; create a modified copy with `dataclasses.replace(attachment, file_name='new.txt')`.
 - The `base_url` attribute was removed; use `tracker.url.removesuffix('REST/2.0/')` if needed.
-- The parameter `query_filter` of `get_attachments()` and `get_attachments_ids()` was renamed to `search_params`, as
+- The parameter `query_filter` of `tickets.get_attachments()` and `tickets.get_attachments_ids()` was renamed to `search_params`, as
   in all other searches. The search conditions no longer replace the condition matching only files: pass
   `files_only=False` to get all parts of the messages (e.g. their text), which `query_filter=[]` returned before:
   ```python
@@ -132,31 +159,31 @@ Python 3.11 or newer is required.
   tracker.get_attachments(1, query_filter=[{'field': 'TransactionId', 'value': 42}, {'field': 'Filename', 'operator': 'IS NOT', 'value': ''}])
   tracker.get_attachments_ids(1, query_filter=[])
   # after
-  tracker.get_attachments(1, search_params=[{'field': 'TransactionId', 'value': 42}])
-  tracker.get_attachments_ids(1, files_only=False)
+  tracker.tickets.get_attachments(1, search_params=[{'field': 'TransactionId', 'value': 42}])
+  tracker.tickets.get_attachments_ids(1, files_only=False)
   ```
-- `search()` raises `InvalidUseError` if `raw_query` is combined with conditions (keyword arguments or `conditions`),
+- `tickets.search()` raises `InvalidUseError` if `raw_query` is combined with conditions (keyword arguments or `conditions`),
   which were silently ignored before; add them to the query instead. `queue` and `order` can still be combined with it.
-- `user_exists()` requires `privileged`: before, it defaulted to `True`, so it returned `False` for existing
+- `users.exists()` requires `privileged`: before, it defaulted to `True`, so it returned `False` for existing
   unprivileged users (e.g. requestors), which was easily overlooked:
   ```python
   # before
   tracker.user_exists('alice')
   # after: the same, or privileged=False for any existing user
-  tracker.user_exists('alice', privileged=True)
+  tracker.users.exists('alice', privileged=True)
   ```
-- `create_user()` and `edit_user()` accept the fields of users of RT 5.0 and 6.0: use `NickName` instead of
+- `users.create()` and `users.edit()` accept the fields of users of RT 5.0 and 6.0: use `NickName` instead of
   `Nickname` and `FreeformContactInfo` instead of `ContactInfo`, which RT ignored. `EmailEncoding`, `WebEncoding`,
   `ExternalContactInfoId`, `ContactInfoSystem`, `ExternalAuthId` and `AuthSystem` were removed, as they are no fields
   of RT 5.0 or newer and RT ignored them; `Timezone` and `SMIMECertificate` were added.
-- `get_ticket_history()` and `get_asset_history()` return the fields `Field`, `OldValue`, `NewValue`, `Data` and
+- `tickets.history()` and `assets.history()` return the fields `Field`, `OldValue`, `NewValue`, `Data` and
   `TimeTaken` of each transaction instead of `Description`, which RT always returned empty:
   ```python
   # before: item['Description'] was always ''
   # after, e.g. for a status change
   print(item['Type'], item['Field'], item['OldValue'], item['NewValue'])  # Status Status new open
   ```
-- `get_links()` also returns links to URLs (`type` `external`, e.g. created with `edit_link(1, 'RefersTo', url)`),
+- `tickets.get_links()` also returns links to URLs (`type` `external`, e.g. created with `tickets.edit_link(1, 'RefersTo', url)`),
   which were missing before; filter by `link['type'] == 'ticket'` for the links between tickets only.
 
 ### Changes
@@ -164,7 +191,7 @@ Python 3.11 or newer is required.
   requested the unknown field ` Description` before, as RT does not remove them.
 - REST2 `UnexpectedResponseError` for unexpected status codes (e.g. 500) contains the error message of RT, e.g.
   `Received status code 500 instead of 200: Internal Server Error`.
-- REST2 `search()` (and `last_updated()` and `new_correspondence()`, which use it) sends the TicketSQL query in the
+- REST2 `tickets.search()` (and `tickets.last_updated()` and `tickets.new_correspondence()`, which use it) sends the TicketSQL query in the
   body of a POST request instead of the URL, so long queries are not limited by the maximum length of URLs of web
   servers and proxies, and search terms do not appear in their access logs. The results are the same.
 - The REST2 client targets the latest version of RT (6.0) and is tested with it, instead of RT 5.0.2. The
@@ -187,16 +214,16 @@ Python 3.11 or newer is required.
   Errors (e.g. for a non-existent ticket) are raised when iterating instead of when calling the method.
 - Move the REST2 `Attachment` class to `rt.common`; it is still available as `rt.rest2.Attachment` and `rt.rest2_async.Attachment`.
 - **Breaking:** `AsyncRt.new_correspondence()` and `AsyncRt.last_updated()` return async iterators directly, like all other
-  methods returning multiple results: use `async for ticket in tracker.last_updated(...)` without `await`.
-- **Breaking:** Values passed to the REST2 `search()` (including the queue name and the date of `last_updated()`) are now
+  methods returning multiple results: use `async for ticket in tracker.tickets.last_updated(...)` without `await`.
+- **Breaking:** Values passed to the REST2 `tickets.search()` (including the queue name and the date of `tickets.last_updated()`) are now
   quoted and escaped, so they can not change the meaning of the query (TicketSQL injection). Values which were escaped
   manually before must not be escaped anymore. `raw_query` is still passed to RT as is.
 - **Breaking:** REST2 clients raise `InvalidUseError` (a `ValueError`) if both `http_auth` and `token` are specified.
-- **Breaking:** REST2 `search()` raises `InvalidUseError` for an unsupported operator suffix (e.g. `Subject__likee`),
+- **Breaking:** REST2 `tickets.search()` raises `InvalidUseError` for an unsupported operator suffix (e.g. `Subject__likee`),
   which was silently treated as `=` before. A field name containing `__` must be followed by an operator,
   e.g. `CF_my__field__exact='value'`.
-- **Breaking:** REST2 `reply()` and `comment()` raise `InvalidUseError` (a `ValueError`) for a `content_type` other
-  than `text/plain` or `text/html` before sending the request, like `create_ticket()` already did.
+- **Breaking:** REST2 `tickets.reply()` and `tickets.comment()` raise `InvalidUseError` (a `ValueError`) for a `content_type` other
+  than `text/plain` or `text/html` before sending the request, like `tickets.create()` already did.
 - **Breaking:** All parameters of the REST1 `Rt` constructor are keyword-only,
   e.g. `Rt(url='https://rt.example.com/REST/1.0/', default_login=..., default_password=...)`.
 - **Breaking:** Rename the type aliases `TYPE_VALID_TICKET_LINK_NAMES` to `TicketLinkName` and `TYPE_CONTENT_TYPE`
@@ -209,7 +236,7 @@ Python 3.11 or newer is required.
   builtin `ConnectionError`. It is now raised for connection and transport errors in REST1 and REST2 (before, the builtin
   `ConnectionError` was raised). As it is a subclass of both `RtError` and the builtin `ConnectionError`, existing
   `except ConnectionError` code keeps working.
-- **Breaking:** The parameters `cc`, `bcc`, `content_type` and `files` of the REST1 `reply()` and `comment()` are keyword-only.
+- **Breaking:** The parameters `cc`, `bcc`, `content_type` and `files` of the REST1 `tickets.reply()` and `tickets.comment()` are keyword-only.
 - REST2 raises `UnexpectedResponseError` instead of `json.JSONDecodeError` if RT (or a proxy in between) returns an invalid
   JSON response, e.g. an HTML login page.
 - REST2 debug logging no longer contains credentials (the `Authorization` header is redacted, request bodies are not logged)
@@ -220,20 +247,20 @@ Python 3.11 or newer is required.
   in code that is type checked as well (runtime behaviour is unchanged):
   - REST2: values passed as `**kwargs` to create/edit methods are typed as JSON data (`rt.common.JSONInput`), query
     parameters as `rt.common.QueryParams`. Returned RT objects stay `dict[str, Any]`.
-  - REST1: return types are concrete instead of `dict`, e.g. `search()` returns `list[dict[str, str | Sequence[str]]]`.
-    Ticket fields passed to `create_ticket()`/`edit_ticket()` are typed `str | list[str] | tuple[str, ...]`, which are
+  - REST1: return types are concrete instead of `dict`, e.g. `tickets.search()` returns `list[dict[str, str | Sequence[str]]]`.
+    Ticket fields passed to `tickets.create()`/`tickets.edit()` are typed `str | list[str] | tuple[str, ...]`, which are
     the only types these methods ever supported. Files to attach are typed `rt.rest1.FileTuple`.
 - REST2 validates the content of responses (e.g. status messages must be strings, created objects must have an ID)
   and raises `UnexpectedResponseError` instead of failing later with an unrelated error.
-- **Breaking:** REST2 `take()`, `untake()`, `steal()` and `merge_ticket()` raise an exception if RT refuses the action
+- **Breaking:** REST2 `tickets.take()`, `tickets.untake()`, `tickets.steal()` and `tickets.merge()` raise an exception if RT refuses the action
   instead of returning `False`: `InvalidUseError` (e.g. "That user already owns that ticket"), `NotAllowedError` for
   "Permission Denied", and `NotFoundError` if the destination ticket of a merge does not exist.
-- **Breaking:** All optional parameters of the REST2 methods are keyword-only (except `content` of `reply()` and
-  `comment()`). The parameters of `create_ticket()` are ordered `queue, *, subject, content, content_type, attachments`.
-- **Breaking:** Rename the REST2 parameter `query_format` to `fields` in `search()`, `get_ticket()`, `get_asset()`,
-  `get_attachments()` and `search_assets()`.
+- **Breaking:** All optional parameters of the REST2 methods are keyword-only (except `content` of `tickets.reply()` and
+  `tickets.comment()`). The parameters of `tickets.create()` are ordered `queue, *, subject, content, content_type, attachments`.
+- **Breaking:** Rename the REST2 parameter `query_format` to `fields` in `tickets.search()`, `tickets.get()`, `assets.get()`,
+  `tickets.get_attachments()` and `assets.search()`.
 - **Breaking:** REST2 raises `NotAllowedError` for HTTP status 403 (before `UnexpectedResponseError`), with the message
-  sent by RT, e.g. "No permission to create tickets in the queue 'General'". This also applies to `create_asset()`
+  sent by RT, e.g. "No permission to create tickets in the queue 'General'". This also applies to `assets.create()`
   with a catalog that does not exist, for which RT answers with 403.
 - **Breaking:** `InvalidUseError` is a subclass of both `RtError` and the builtin `ValueError`. REST2 raises it instead
   of `ValueError` for invalid arguments, so all errors are `RtError`s, while `except ValueError` keeps working.
@@ -241,37 +268,37 @@ Python 3.11 or newer is required.
   REST2 sets them for all errors caused by an HTTP response of RT; otherwise they are `None`.
 ### Fixed
 - REST2: IDs and names used in URLs (e.g. user or queue names) are percent-encoded, so they can no longer change
-  the requested endpoint. Previously e.g. `get_user('../ticket/1')` returned ticket 1, and names containing `?` or `#`
+  the requested endpoint. Previously e.g. `users.get('../ticket/1')` returned ticket 1, and names containing `?` or `#`
   were truncated.
-- REST2 `search()` with custom fields (`CF_<name>=...`) created a malformed query and always failed.
-- REST2 `search()` failed for values containing a single quote.
-- REST2 `search()` used field names of conditions as they are, so a field name passed in `conditions` (e.g. from user
+- REST2 `tickets.search()` with custom fields (`CF_<name>=...`) created a malformed query and always failed.
+- REST2 `tickets.search()` failed for values containing a single quote.
+- REST2 `tickets.search()` used field names of conditions as they are, so a field name passed in `conditions` (e.g. from user
   input) could change the meaning of the query. Field names other than plain names like `Subject` or
   `Requestor.EmailAddress` are quoted now, which also allows e.g. `conditions={'CustomRole.{Manager}': 'alice'}`.
-- REST2 `search_assets()` with a condition on `Catalog` in `search_params` returned the assets of all catalogs.
-- REST2 `edit_queue()` and `create_queue()` rejected the fields `SubjectTag`, `CustomFields`, `Cc` and `AdminCc`, which
+- REST2 `assets.search()` with a condition on `Catalog` in `search_params` returned the assets of all catalogs.
+- REST2 `queues.edit()` and `queues.create()` rejected the fields `SubjectTag`, `CustomFields`, `Cc` and `AdminCc`, which
   RT supports.
-- REST2 `edit_link()` and `merge_ticket()` require RT 5.0.1, where REST2 supports changing links and merging; they
-  raise `UnexpectedResponseError` with RT 5.0.0, which ignores the request (`edit_link()` returned an empty list
+- REST2 `tickets.edit_link()` and `tickets.merge()` require RT 5.0.1, where REST2 supports changing links and merging; they
+  raise `UnexpectedResponseError` with RT 5.0.0, which ignores the request (`tickets.edit_link()` returned an empty list
   before, as if the link was changed).
-- REST2 `get_rights()` with `user` returned all rights of the object if the user did not exist, as RT ignores the
+- REST2 `rights.get()` with `user` returned all rights of the object if the user did not exist, as RT ignores the
   filter then. Only rights of the given user are returned now.
-- REST2 `add_group_member()` raises `NotFoundError` instead of `InvalidUseError` if the member is a group which is not
-  user defined (e.g. a system group), which RT reports as not found, like `add_user_to_group()`.
-- REST2 `create_ticket()` accepts the ID of the queue as well, which RT supports (the type hint only allowed names).
-- REST2 `edit_ticket()` did not detect non-existent users or queues for many names (e.g. queue "Support").
+- REST2 `groups.add_member()` raises `NotFoundError` instead of `InvalidUseError` if the member is a group which is not
+  user defined (e.g. a system group), which RT reports as not found, like `users.add_to_group()`.
+- REST2 `tickets.create()` accepts the ID of the queue as well, which RT supports (the type hint only allowed names).
+- REST2 `tickets.edit()` did not detect non-existent users or queues for many names (e.g. queue "Support").
 - REST2 paginated results: no `NotFoundError` anymore for empty results of users who are not allowed to see all results
   (RT >= 5.0.5), no more missing results after a page whose items are all hidden from the user, and no more duplicate
   results if items are deleted while iterating.
-- REST2 `search_assets()` modified the `search_params` list passed by the caller.
-- REST2 `last_updated()` accepted invalid dates like 2024-02-30.
+- REST2 `assets.search()` modified the `search_params` list passed by the caller.
+- REST2 `tickets.last_updated()` accepted invalid dates like 2024-02-30.
 - REST2 delete operations treated a non-JSON response other than "204 No Content" (e.g. an HTML page returned by a proxy)
   as success.
-- REST2 `edit_link()` returned `True` if RT could not create or delete the link, e.g. a link from a ticket to itself.
-  `edit_link()` and `edit_asset_link()` also raise `InvalidUseError` if RT refuses a link which would create a circular
+- REST2 `tickets.edit_link()` returned `True` if RT could not create or delete the link, e.g. a link from a ticket to itself.
+  `tickets.edit_link()` and `assets.edit_link()` also raise `InvalidUseError` if RT refuses a link which would create a circular
   `DependsOn`/`Parent` relationship, and `NotAllowedError` for "Permission denied" if `$StrictLinkACL` is enabled and
   the user may not change the linked object.
-- REST2 `new_correspondence()` returned all tickets instead of only those last updated by other users than the one of
+- REST2 `tickets.new_correspondence()` returned all tickets instead of only those last updated by other users than the one of
   the connection, as documented (and as implemented in REST1).
 ### Added
 - Add an `http_timeout` parameter to the REST1 `Rt` class.
@@ -280,56 +307,56 @@ Python 3.11 or newer is required.
   an `httpx2.AsyncClient` for `AsyncRt`), e.g. configured with a custom transport, retries, event hooks or HTTP/2.
   It can not be combined with `proxy`, `verify_cert`, `http_auth`, `token` and `http_timeout`, and it is not closed
   by `close()`/`aclose()`, as it is owned by the caller.
-- REST2 `last_updated()` accepts `datetime.date` and `datetime.datetime` objects. A `datetime` with timezone is
+- REST2 `tickets.last_updated()` accepts `datetime.date` and `datetime.datetime` objects. A `datetime` with timezone is
   converted to UTC and therefore an exact point in time; dates and naive datetimes (like strings) are interpreted by
   RT in the timezone of the RT user.
-- Add `rt.common.SearchFormat` for the `fields` values `'i'`, `'s'` and `'l'` of the REST2 `search()`.
+- Add `rt.common.SearchFormat` for the `fields` values `'i'`, `'s'` and `'l'` of the REST2 `tickets.search()`.
 - Add `rt.common.VALID_CONTENT_TYPES`. It and `VALID_TICKET_LINK_NAMES` are derived from the corresponding `Literal` types,
   so the type hints and the checks at runtime can not differ.
-- REST2 `search()` supports the TicketSQL operators `__gte` (>=), `__lte` (<=), `__startswith`, `__notstartswith`,
+- REST2 `tickets.search()` supports the TicketSQL operators `__gte` (>=), `__lte` (<=), `__startswith`, `__notstartswith`,
   `__endswith`, `__notendswith`, `__is` and `__isnot` (the latter two with the value `None`, e.g. `Resolved__isnot=None`).
-- REST2 `search()` accepts the conditions as a mapping with the new `conditions` parameter, e.g.
-  `search(conditions={'CF_Contact Email': 'a@example.com'})`. Unlike unpacking a dictionary into the keyword arguments
-  (`search(**conditions)`), which mypy rejects as the values may be passed to the other parameters, this is type-safe.
+- REST2 `tickets.search()` accepts the conditions as a mapping with the new `conditions` parameter, e.g.
+  `tickets.search(conditions={'CF_Contact Email': 'a@example.com'})`. Unlike unpacking a dictionary into the keyword arguments
+  (`tickets.search(**conditions)`), which mypy rejects as the values may be passed to the other parameters, this is type-safe.
   Conditions as keyword arguments continue to work and can be combined with it.
 - REST2 clients can be closed with `close()` (sync) / `aclose()` (async) or used as (async) context manager to close
   the underlying HTTP connections.
-- REST2 rights: `get_rights()`, `get_available_rights()`, `grant_right()` and `revoke_right()` on queues, groups,
+- REST2 rights: `rights.get()`, `rights.get_available()`, `rights.grant()` and `rights.revoke()` on queues, groups,
   classes, catalogs, custom fields and globally (RT 6.0.3 or newer).
-- REST2 users and groups: `search_users()`, `get_user_groups()`, `add_user_to_group()`, `remove_user_from_group()`,
-  `remove_user_from_all_groups()`, `search_groups()`, `get_group()`, `create_group()`, `edit_group()`,
-  `delete_group()`, `get_group_members()`, `add_group_member()`, `remove_group_member()` and
-  `remove_all_group_members()`.
-- REST2 custom fields: `search_custom_fields()`, `get_custom_field()`, `create_custom_field()`, `edit_custom_field()`,
-  `delete_custom_field()`, `get_custom_field_applies_to()`, `apply_custom_field()`, `unapply_custom_field()`
-  (the latter three RT 6.0.3 or newer), `get_custom_field_values()`, `get_custom_field_value()`,
-  `add_custom_field_value()`, `edit_custom_field_value()`, `delete_custom_field_value()` and
-  `get_custom_field_file()`.
-- The docstrings of all REST2 methods state the minimum RT version they require, e.g. `take()`, `untake()`,
-  `steal()` and `get_attachments()` require RT 5.0.1.
+- REST2 users and groups: `users.search()`, `users.get_groups()`, `users.add_to_group()`, `users.remove_from_group()`,
+  `users.remove_from_all_groups()`, `groups.search()`, `groups.get()`, `groups.create()`, `groups.edit()`,
+  `groups.delete()`, `groups.get_members()`, `groups.add_member()`, `groups.remove_member()` and
+  `groups.remove_all_members()`.
+- REST2 custom fields: `custom_fields.search()`, `custom_fields.get()`, `custom_fields.create()`, `custom_fields.edit()`,
+  `custom_fields.delete()`, `custom_fields.get_applies_to()`, `custom_fields.apply()`, `custom_fields.unapply()`
+  (the latter three RT 6.0.3 or newer), `custom_fields.get_values()`, `custom_fields.get_value()`,
+  `custom_fields.add_value()`, `custom_fields.edit_value()`, `custom_fields.delete_value()` and
+  `custom_fields.get_file()`.
+- The docstrings of all REST2 methods state the minimum RT version they require, e.g. `tickets.take()`, `tickets.untake()`,
+  `tickets.steal()` and `tickets.get_attachments()` require RT 5.0.1.
 - REST2 `get_system_info()` returns the RT version and plugins.
-- REST2 `reply()` and `comment()` accept `subject`, `time_taken`, `status`, `custom_fields`, `custom_roles` and
+- REST2 `tickets.reply()` and `tickets.comment()` accept `subject`, `time_taken`, `status`, `custom_fields`, `custom_roles` and
   `txn_custom_fields`, to change the ticket in the same request (`status` and `custom_roles` require RT 5.0.2).
-- REST2 catalogs: `get_all_catalogs()`, `search_catalogs()`, `create_catalog()`, `edit_catalog()` and
-  `delete_catalog()`.
-- REST2 `search_assets()` accepts an AssetSQL query as `raw_query` (RT 5.0.2 or newer).
-- REST2 `get_ticket_messages()` returns the creation, replies and comments of a ticket with their text and author in
-  one request per 100 messages, instead of `get_ticket_history()` followed by `get_transaction()` for each entry
+- REST2 catalogs: `catalogs.all()`, `catalogs.search()`, `catalogs.create()`, `catalogs.edit()` and
+  `catalogs.delete()`.
+- REST2 `assets.search()` accepts an AssetSQL query as `raw_query` (RT 5.0.2 or newer).
+- REST2 `tickets.messages()` returns the creation, replies and comments of a ticket with their text and author in
+  one request per 100 messages, instead of `tickets.history()` followed by `tickets.get_transaction()` for each entry
   (both remain available).
-- REST2 `edit_asset_link()` and `get_asset_links()` add, delete and return the links of assets, like `edit_link()`
-  and `get_links()` for tickets. Assets are linked as `'asset:<id>'`, e.g. `edit_link(1, 'RefersTo', 'asset:3')`.
-- REST2 `search_attachments()` searches files (or with `files_only=False` all parts of messages) across all
-  tickets, e.g. by name, content type or creation time. The docstring of `get_attachments()` shows how to get the
+- REST2 `assets.edit_link()` and `assets.get_links()` add, delete and return the links of assets, like `tickets.edit_link()`
+  and `tickets.get_links()` for tickets. Assets are linked as `'asset:<id>'`, e.g. `tickets.edit_link(1, 'RefersTo', 'asset:3')`.
+- REST2 `tickets.search_attachments()` searches files (or with `files_only=False` all parts of messages) across all
+  tickets, e.g. by name, content type or creation time. The docstring of `tickets.get_attachments()` shows how to get the
   files of a single reply or comment.
-- REST2 `search_queues()` searches queues, `search_custom_roles()` and `get_custom_role()` read custom roles.
-- REST2 classes and articles (RT 5.0.1 or newer): `get_all_classes()`, `search_classes()`, `get_class()`,
-  `create_class()`, `edit_class()`, `delete_class()`, `search_articles()`, `get_article()`, `create_article()`,
-  `edit_article()`, `delete_article()` and `get_article_history()`.
-- REST2 `search_transactions()` searches transactions, also across tickets, with conditions or a TransactionSQL
+- REST2 `queues.search()` searches queues, `custom_roles.search()` and `custom_roles.get()` read custom roles.
+- REST2 classes and articles (RT 5.0.1 or newer): `classes.all()`, `classes.search()`, `classes.get()`,
+  `classes.create()`, `classes.edit()`, `classes.delete()`, `articles.search()`, `articles.get()`, `articles.create()`,
+  `articles.edit()`, `articles.delete()` and `articles.history()`.
+- REST2 `tickets.search_transactions()` searches transactions, also across tickets, with conditions or a TransactionSQL
   query (`raw_query`, RT 5.0.2 or newer).
-- REST2 `delete_asset()` marks an asset as deleted by setting its status (the REST2 endpoint for deleting assets
+- REST2 `assets.delete()` marks an asset as deleted by setting its status (the REST2 endpoint for deleting assets
   always fails, as RT does not delete assets).
-- REST2 `create_custom_field()` raises `InvalidUseError` if `Queue` is passed for a custom field which is not a ticket
+- REST2 `custom_fields.create()` raises `InvalidUseError` if `Queue` is passed for a custom field which is not a ticket
   custom field, as RT would silently create a ticket custom field instead.
 - Add `rt.exceptions.ConflictError`, which REST2 raises for HTTP status 409 (e.g. when granting a right which is
   already granted) with the message of RT. It is a subclass of `UnexpectedResponseError`, which was raised before,

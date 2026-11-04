@@ -48,7 +48,7 @@ jobs:
 
       - name: Test with pytest
         run: |
-          uv run pytest -v -m '' tests
+          uv run pytest -v -n 0 -m '' tests
 
 
   coverage:
@@ -85,7 +85,7 @@ jobs:
 
       - name: Generate coverage data
         run: |
-          uv run coverage run --omit tests --parallel-mode -m pytest -m '' tests
+          uv run coverage run --omit tests --parallel-mode -m pytest -n 0 -m '' tests
 
       - name: Combine coverage & create xml report
         run: |

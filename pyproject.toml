@@ -58,6 +58,7 @@ dev = [
 test = [
   "pytest~=9.1",
   "pytest-asyncio~=1.4",
+  "pytest-xdist~=3.8",
   "coverage~=7.6",
   "typeguard>=4.6.0",
 ]
@@ -78,8 +79,8 @@ source = "vcs"
 [tool.unasyncd]
 # rt/rest2.py and the sync REST2 tests are generated from the async ones, do not edit them manually.
 # Run `uv run unasyncd` to regenerate them; it exits with 1 if a generated file was out of date.
-files = { "rt/rest2_async.py" = "rt/rest2.py", "tests/test_basic_async.py" = "tests/test_basic.py", "tests/test_tickets_async.py" = "tests/test_tickets.py", "tests/test_rest2_fixes_async.py" = "tests/test_rest2_fixes.py", "tests/test_rest2_admin_async.py" = "tests/test_rest2_admin.py", "tests/test_rest2_messages_async.py" = "tests/test_rest2_messages.py" }
-add_replacements = { "AsyncRt" = "Rt", "httpx2.AsyncClient" = "httpx2.Client", "aclose" = "close" }
+files = { "rt/rest2_async.py" = "rt/rest2.py", "rt/_rest2_async/__init__.py" = "rt/_rest2/__init__.py", "rt/_rest2_async/transport.py" = "rt/_rest2/transport.py", "rt/_rest2_async/tickets.py" = "rt/_rest2/tickets.py", "rt/_rest2_async/users.py" = "rt/_rest2/users.py", "rt/_rest2_async/groups.py" = "rt/_rest2/groups.py", "rt/_rest2_async/queues.py" = "rt/_rest2/queues.py", "rt/_rest2_async/assets.py" = "rt/_rest2/assets.py", "rt/_rest2_async/articles.py" = "rt/_rest2/articles.py", "rt/_rest2_async/custom_fields.py" = "rt/_rest2/custom_fields.py", "rt/_rest2_async/rights.py" = "rt/_rest2/rights.py", "tests/test_basic_async.py" = "tests/test_basic.py", "tests/test_tickets_async.py" = "tests/test_tickets.py", "tests/test_rest2_fixes_async.py" = "tests/test_rest2_fixes.py", "tests/test_rest2_admin_async.py" = "tests/test_rest2_admin.py", "tests/test_rest2_messages_async.py" = "tests/test_rest2_messages.py" }
+add_replacements = { "AsyncRt" = "Rt", "rt._rest2_async.transport._AsyncTransport" = "rt._rest2.transport._Transport", "rt._rest2_async.tickets.AsyncTickets" = "rt._rest2.tickets.Tickets", "rt._rest2_async.users.AsyncUsers" = "rt._rest2.users.Users", "rt._rest2_async.groups.AsyncGroups" = "rt._rest2.groups.Groups", "rt._rest2_async.queues.AsyncQueues" = "rt._rest2.queues.Queues", "rt._rest2_async.assets.AsyncAssets" = "rt._rest2.assets.Assets", "rt._rest2_async.assets.AsyncCatalogs" = "rt._rest2.assets.Catalogs", "rt._rest2_async.articles.AsyncArticles" = "rt._rest2.articles.Articles", "rt._rest2_async.articles.AsyncClasses" = "rt._rest2.articles.Classes", "rt._rest2_async.custom_fields.AsyncCustomFields" = "rt._rest2.custom_fields.CustomFields", "rt._rest2_async.custom_fields.AsyncCustomRoles" = "rt._rest2.custom_fields.CustomRoles", "rt._rest2_async.rights.AsyncRights" = "rt._rest2.rights.Rights", "_AsyncTransport" = "_Transport", "AsyncTickets" = "Tickets", "AsyncUsers" = "Users", "AsyncGroups" = "Groups", "AsyncQueues" = "Queues", "AsyncAssets" = "Assets", "AsyncCatalogs" = "Catalogs", "AsyncArticles" = "Articles", "AsyncClasses" = "Classes", "AsyncCustomFields" = "CustomFields", "AsyncCustomRoles" = "CustomRoles", "AsyncRights" = "Rights", "httpx2.AsyncClient" = "httpx2.Client", "aclose" = "close" }
 add_editors_note = true
 transform_docstrings = true
 # removes the imports of the async modules which are left in the generated tests
@@ -144,10 +145,11 @@ testpaths = [
   "tests"
 ]
 # The sync tests are generated from the async tests (see [tool.unasyncd]) and only run with `pytest -m sync` or
-# `pytest -m ""` (all tests).
-addopts = "-m 'not sync'"
+# `pytest -m ""` (all tests). The tests run in 4 parallel processes (pytest-xdist), use `-n 0` to debug them.
+addopts = "-m 'not sync' -n 4"
 markers = [
   "sync: tests of the sync REST2 client, generated from the async tests (not run by default)",
+  "live: tests which need a running RT (all others, e.g. with mocked responses, run in seconds: pytest -m 'not live')",
 ]
 
 [tool.ruff]
@@ -246,8 +248,9 @@ ignore = [
 "rt/rest1.py" = [
   "N803", # Argument name should be lowercase
 ]
-"rt/rest2.py" = [
-  "UP028", # yield-in-for-loop; generated from rt/rest2_async.py where `yield from` is not available
+# generated from the files in rt/_rest2_async/, where `yield from` is not available
+"rt/_rest2/*.py" = [
+  "UP028", # yield-in-for-loop
 ]
 # generated from the corresponding *_async.py files, where `[item async for item in ...]` can not be replaced by list()
 "tests/test_basic.py" = ["C416"]

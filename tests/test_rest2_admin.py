@@ -47,20 +47,20 @@ def _small_pages_client() -> Rt:
 def _create_user(connection: Rt, **kwargs: typing.Any) -> tuple[str, int]:
     """Create a user with a random name and return its name and ID."""
     name = f'user-{random_string()}'
-    connection.create_user(name, f'{name}@example.com', **kwargs)
-    user = connection.get_user(name)
+    connection.users.create(name, f'{name}@example.com', **kwargs)
+    user = connection.users.get(name)
     return name, int(user['id'])
 
 
 def _create_group(connection: Rt) -> int:
     """Create a group with a random name and return its ID."""
-    return connection.create_group(f'group-{random_string()}', Description='python-rt test')
+    return connection.groups.create(f'group-{random_string()}', Description='python-rt test')
 
 
 def _create_queue(connection: Rt) -> tuple[str, int]:
     """Create a queue with a random name and return its name and ID."""
     name = f'queue-{random_string()}'
-    return name, connection.create_queue(name)
+    return name, connection.queues.create(name)
 
 
 # --- system --------------------------------------------------------------------------------------------------------
@@ -93,7 +93,7 @@ def test_conflict_error():
 def test_search_users(rt_connection: Rt):
     name, _ = _create_user(rt_connection, RealName='Search Test')
 
-    found = _collect(rt_connection.search_users(search_params=[{'field': 'Name', 'value': name}]))
+    found = _collect(rt_connection.users.search(search_params=[{'field': 'Name', 'value': name}]))
 
     assert [user['Name'] for user in found] == [name]
     assert found[0]['RealName'] == 'Search Test'
@@ -106,8 +106,8 @@ def test_search_users_privileged(rt_connection: Rt):
     unprivileged_name, _ = _create_user(rt_connection)
     condition = [{'field': 'Name', 'operator': 'LIKE', 'value': 'user-'}]
 
-    privileged = [user['Name'] for user in rt_connection.search_users(search_params=condition, privileged=True)]
-    unprivileged = [user['Name'] for user in rt_connection.search_users(search_params=condition, privileged=False)]
+    privileged = [user['Name'] for user in rt_connection.users.search(search_params=condition, privileged=True)]
+    unprivileged = [user['Name'] for user in rt_connection.users.search(search_params=condition, privileged=False)]
 
     assert privileged_name in privileged
     assert privileged_name not in unprivileged
@@ -117,23 +117,27 @@ def test_search_users_privileged(rt_connection: Rt):
 
 def test_search_users_disabled(rt_connection: Rt):
     name, _ = _create_user(rt_connection)
-    rt_connection.delete_user(name)
+    rt_connection.users.delete(name)
     condition = [{'field': 'Name', 'value': name}]
 
-    assert _collect(rt_connection.search_users(search_params=condition)) == []
-    assert [user['Name'] for user in rt_connection.search_users(search_params=condition, include_disabled=True)] == [name]
+    assert _collect(rt_connection.users.search(search_params=condition)) == []
+    assert [user['Name'] for user in rt_connection.users.search(search_params=condition, include_disabled=True)] == [name]
 
 
 def test_search_users_all_pages(rt_connection: Rt):
-    _create_user(rt_connection)
-    _create_user(rt_connection)
+    # only the users of this test are searched, so that users created by other tests (running in parallel) do not matter
+    prefix = f'paged-{random_string()}'
+    names = [f'{prefix}-{number}' for number in range(3)]
+    for name in names:
+        rt_connection.users.create(name, f'{name}@example.com')
+    condition = [{'field': 'Name', 'operator': 'LIKE', 'value': prefix}]
 
-    all_users = [user['id'] for user in rt_connection.search_users()]
+    all_users = [user['Name'] for user in rt_connection.users.search(search_params=condition)]
     with _small_pages_client() as tracker:
-        paged_users = [user['id'] for user in tracker.search_users()]
+        paged_users = [user['Name'] for user in tracker.users.search(search_params=condition)]
 
-    assert len(all_users) > 2
-    assert sorted(paged_users) == sorted(all_users)
+    assert sorted(all_users) == names
+    assert sorted(paged_users) == names
 
 
 # --- groups --------------------------------------------------------------------------------------------------------
@@ -141,40 +145,40 @@ def test_search_users_all_pages(rt_connection: Rt):
 
 def test_group(rt_connection: Rt):
     name = f'group-{random_string()}'
-    group_id = rt_connection.create_group(name, Description='first')
+    group_id = rt_connection.groups.create(name, Description='first')
 
-    group = rt_connection.get_group(group_id)
+    group = rt_connection.groups.get(group_id)
     assert group['Name'] == name
     assert group['Description'] == 'first'
 
-    found = _collect(rt_connection.search_groups(search_params=[{'field': 'Name', 'value': name}]))
+    found = _collect(rt_connection.groups.search(search_params=[{'field': 'Name', 'value': name}]))
     assert [(int(item['id']), item['Name'], item['Description']) for item in found] == [(group_id, name, 'first')]
 
-    assert (rt_connection.edit_group(group_id, Description='second')).complete
-    assert (rt_connection.get_group(group_id))['Description'] == 'second'
+    assert (rt_connection.groups.edit(group_id, Description='second')).complete
+    assert (rt_connection.groups.get(group_id))['Description'] == 'second'
 
     with pytest.raises(rt.exceptions.BadRequestError, match='already in use'):
-        rt_connection.create_group(name)
+        rt_connection.groups.create(name)
 
 
 def test_delete_group(rt_connection: Rt):
     name = f'group-{random_string()}'
-    group_id = rt_connection.create_group(name)
+    group_id = rt_connection.groups.create(name)
     condition = [{'field': 'Name', 'value': name}]
 
-    rt_connection.delete_group(group_id)
+    rt_connection.groups.delete(group_id)
 
-    assert (rt_connection.get_group(group_id))['Disabled'] == '1'
-    assert _collect(rt_connection.search_groups(search_params=condition)) == []
-    assert [int(item['id']) for item in rt_connection.search_groups(search_params=condition, include_disabled=True)] == [group_id]
+    assert (rt_connection.groups.get(group_id))['Disabled'] == '1'
+    assert _collect(rt_connection.groups.search(search_params=condition)) == []
+    assert [int(item['id']) for item in rt_connection.groups.search(search_params=condition, include_disabled=True)] == [group_id]
 
 
 def test_group_not_found(rt_connection: Rt):
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.get_group(999999)
+        rt_connection.groups.get(999999)
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_group(999999, Description='x')
+        rt_connection.groups.edit(999999, Description='x')
 
 
 def test_group_members(rt_connection: Rt):
@@ -183,12 +187,12 @@ def test_group_members(rt_connection: Rt):
     user_name, user_id = _create_user(rt_connection)
     _, inner_user_id = _create_user(rt_connection)
 
-    assert (rt_connection.add_group_member(group_id, user_id)).complete
-    rt_connection.add_group_member(group_id, inner_group_id)
-    rt_connection.add_group_member(inner_group_id, inner_user_id)
+    assert (rt_connection.groups.add_member(group_id, user_id)).complete
+    rt_connection.groups.add_member(group_id, inner_group_id)
+    rt_connection.groups.add_member(inner_group_id, inner_user_id)
 
     def member_ids(**kwargs: bool) -> set[tuple[str, int]]:
-        return {(member['type'], int(member['id'])) for member in rt_connection.get_group_members(group_id, **kwargs)}
+        return {(member['type'], int(member['id'])) for member in rt_connection.groups.get_members(group_id, **kwargs)}
 
     assert member_ids() == {('user', user_id), ('group', inner_group_id)}
     assert member_ids(users=False) == {('group', inner_group_id)}
@@ -196,15 +200,15 @@ def test_group_members(rt_connection: Rt):
     assert member_ids(recursive=True, groups=False) == {('user', user_id), ('user', inner_user_id)}
 
     # get_group returns the direct members with the names of users
-    members = (rt_connection.get_group(group_id))['Members']
+    members = (rt_connection.groups.get(group_id))['Members']
     assert {str(member['id']) for member in members} == {user_name, str(inner_group_id)}
 
-    rt_connection.remove_group_member(group_id, user_id)
+    rt_connection.groups.remove_member(group_id, user_id)
     assert member_ids() == {('group', inner_group_id)}
     # RT also confirms removing a principal which is not a member
-    rt_connection.remove_group_member(group_id, user_id)
+    rt_connection.groups.remove_member(group_id, user_id)
 
-    rt_connection.remove_all_group_members(group_id)
+    rt_connection.groups.remove_all_members(group_id)
     assert member_ids() == set()
 
 
@@ -213,12 +217,12 @@ def test_group_members_all_pages(rt_connection: Rt):
     user_ids = set()
     for _ in range(5):
         _, user_id = _create_user(rt_connection)
-        rt_connection.add_group_member(group_id, user_id)
+        rt_connection.groups.add_member(group_id, user_id)
         user_ids.add(user_id)
 
     # RT does not return the number of pages for members
     with _small_pages_client() as tracker:
-        members = [int(member['id']) for member in tracker.get_group_members(group_id)]
+        members = [int(member['id']) for member in tracker.groups.get_members(group_id)]
 
     assert sorted(members) == sorted(user_ids)
 
@@ -226,22 +230,22 @@ def test_group_members_all_pages(rt_connection: Rt):
 def test_add_group_member_refused(rt_connection: Rt):
     group_id = _create_group(rt_connection)
     _, user_id = _create_user(rt_connection)
-    rt_connection.add_group_member(group_id, user_id)
+    rt_connection.groups.add_member(group_id, user_id)
 
     with pytest.raises(rt.exceptions.InvalidUseError, match='already has member'):
-        rt_connection.add_group_member(group_id, user_id)
+        rt_connection.groups.add_member(group_id, user_id)
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.add_group_member(group_id, 999999)
+        rt_connection.groups.add_member(group_id, 999999)
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.add_group_member(999999, user_id)
+        rt_connection.groups.add_member(999999, user_id)
 
 
 def test_get_group_members_users_and_groups_excluded():
     with _mock_client(_no_request) as tracker:
         with pytest.raises(rt.exceptions.InvalidUseError):
-            _collect(tracker.get_group_members(1, users=False, groups=False))
+            _collect(tracker.groups.get_members(1, users=False, groups=False))
 
 
 def test_user_groups(rt_connection: Rt):
@@ -249,39 +253,39 @@ def test_user_groups(rt_connection: Rt):
     other_group_id = _create_group(rt_connection)
     user_name, _ = _create_user(rt_connection)
 
-    assert (rt_connection.add_user_to_group(user_name, group_id)).complete
-    rt_connection.add_user_to_group(user_name, other_group_id)
-    assert {int(group['id']) for group in rt_connection.get_user_groups(user_name)} == {group_id, other_group_id}
+    assert (rt_connection.users.add_to_group(user_name, group_id)).complete
+    rt_connection.users.add_to_group(user_name, other_group_id)
+    assert {int(group['id']) for group in rt_connection.users.get_groups(user_name)} == {group_id, other_group_id}
 
-    rt_connection.remove_user_from_group(user_name, group_id)
-    assert [int(group['id']) for group in rt_connection.get_user_groups(user_name)] == [other_group_id]
+    rt_connection.users.remove_from_group(user_name, group_id)
+    assert [int(group['id']) for group in rt_connection.users.get_groups(user_name)] == [other_group_id]
     # RT also confirms removing a user which is not a member
-    rt_connection.remove_user_from_group(user_name, group_id)
+    rt_connection.users.remove_from_group(user_name, group_id)
 
-    rt_connection.remove_user_from_all_groups(user_name)
-    assert _collect(rt_connection.get_user_groups(user_name)) == []
+    rt_connection.users.remove_from_all_groups(user_name)
+    assert _collect(rt_connection.users.get_groups(user_name)) == []
 
 
 def test_add_user_to_group_refused(rt_connection: Rt):
     group_id = _create_group(rt_connection)
     user_name, _ = _create_user(rt_connection)
-    rt_connection.add_user_to_group(user_name, group_id)
+    rt_connection.users.add_to_group(user_name, group_id)
 
     with pytest.raises(rt.exceptions.InvalidUseError, match='already has member'):
-        rt_connection.add_user_to_group(user_name, group_id)
+        rt_connection.users.add_to_group(user_name, group_id)
 
     with pytest.raises(rt.exceptions.NotFoundError, match='not found'):
-        rt_connection.add_user_to_group(user_name, 999999)
+        rt_connection.users.add_to_group(user_name, 999999)
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.add_user_to_group(f'missing-{random_string()}', group_id)
+        rt_connection.users.add_to_group(f'missing-{random_string()}', group_id)
 
 
 @pytest.mark.parametrize('result', [[], [1], ['1', 'Member added'], [1, 2], {'message': 'x'}])
 def test_add_user_to_group_unexpected_response(result: typing.Any):
     with _mock_client(lambda request: httpx2.Response(200, json=result)) as tracker:
         with pytest.raises(rt.exceptions.UnexpectedResponseError):
-            tracker.add_user_to_group('alice', 1)
+            tracker.users.add_to_group('alice', 1)
 
 
 # --- custom fields -------------------------------------------------------------------------------------------------
@@ -291,50 +295,50 @@ def test_custom_field(rt_connection: Rt):
     queue_name, queue_id = _create_queue(rt_connection)
     name = f'cf-{random_string()}'
 
-    cf_id = rt_connection.create_custom_field(name, 'Select', 'RT::Queue-RT::Ticket', MaxValues=1, Queue=queue_name)
+    cf_id = rt_connection.custom_fields.create(name, 'Select', 'RT::Queue-RT::Ticket', MaxValues=1, Queue=queue_name)
 
-    custom_field = rt_connection.get_custom_field(cf_id)
+    custom_field = rt_connection.custom_fields.get(cf_id)
     assert (custom_field['Name'], custom_field['Type'], custom_field['LookupType']) == (name, 'Select', 'RT::Queue-RT::Ticket')
 
-    by_name = _collect(rt_connection.search_custom_fields(search_params=[{'field': 'Name', 'value': name}]))
+    by_name = _collect(rt_connection.custom_fields.search(search_params=[{'field': 'Name', 'value': name}]))
     assert [(int(item['id']), item['Name'], item['Type']) for item in by_name] == [(cf_id, name, 'Select')]
-    assert cf_id in [int(item['id']) for item in rt_connection.search_custom_fields()]
-    assert [int(item['id']) for item in rt_connection.search_custom_fields(object_type='queue', object_id=queue_id)] == [cf_id]
+    assert cf_id in [int(item['id']) for item in rt_connection.custom_fields.search()]
+    assert [int(item['id']) for item in rt_connection.custom_fields.search(object_type='queue', object_id=queue_id)] == [cf_id]
 
-    assert (rt_connection.edit_custom_field(cf_id, Description='edited')).complete
+    assert (rt_connection.custom_fields.edit(cf_id, Description='edited')).complete
     # RT reports invalid values only in its messages, the value is not changed
-    result = rt_connection.edit_custom_field(cf_id, Type='Invalid')
+    result = rt_connection.custom_fields.edit(cf_id, Type='Invalid')
     assert result
     assert not result.complete
     with pytest.raises(rt.exceptions.InvalidUseError, match='Illegal value'):
         result.raise_for_refused()
-    assert (rt_connection.get_custom_field(cf_id))['Type'] == 'Select'
+    assert (rt_connection.custom_fields.get(cf_id))['Type'] == 'Select'
 
 
 def test_custom_field_invalid(rt_connection: Rt):
     with pytest.raises(rt.exceptions.BadRequestError, match='Type'):
-        rt_connection.create_custom_field(f'cf-{random_string()}', 'Invalid', 'RT::Queue-RT::Ticket')
+        rt_connection.custom_fields.create(f'cf-{random_string()}', 'Invalid', 'RT::Queue-RT::Ticket')
 
     with pytest.raises(rt.exceptions.BadRequestError, match='Queue'):
-        rt_connection.create_custom_field(f'cf-{random_string()}', 'Freeform', 'RT::Queue-RT::Ticket', Queue=f'missing-{random_string()}')
+        rt_connection.custom_fields.create(f'cf-{random_string()}', 'Freeform', 'RT::Queue-RT::Ticket', Queue=f'missing-{random_string()}')
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.get_custom_field(999999)
+        rt_connection.custom_fields.get(999999)
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_custom_field(999999, Description='x')
+        rt_connection.custom_fields.edit(999999, Description='x')
 
 
 def test_delete_custom_field(rt_connection: Rt):
     name = f'cf-{random_string()}'
-    cf_id = rt_connection.create_custom_field(name, 'Freeform', 'RT::Queue-RT::Ticket')
+    cf_id = rt_connection.custom_fields.create(name, 'Freeform', 'RT::Queue-RT::Ticket')
     condition = [{'field': 'Name', 'value': name}]
 
-    rt_connection.delete_custom_field(cf_id)
+    rt_connection.custom_fields.delete(cf_id)
 
-    assert (rt_connection.get_custom_field(cf_id))['Disabled'] == '1'
-    assert _collect(rt_connection.search_custom_fields(search_params=condition)) == []
-    assert [int(item['id']) for item in rt_connection.search_custom_fields(search_params=condition, include_disabled=True)] == [cf_id]
+    assert (rt_connection.custom_fields.get(cf_id))['Disabled'] == '1'
+    assert _collect(rt_connection.custom_fields.search(search_params=condition)) == []
+    assert [int(item['id']) for item in rt_connection.custom_fields.search(search_params=condition, include_disabled=True)] == [cf_id]
 
 
 @pytest.mark.parametrize(
@@ -344,86 +348,86 @@ def test_delete_custom_field(rt_connection: Rt):
 def test_search_custom_fields_invalid_object(object_type: typing.Any, object_id: int | None):
     with _mock_client(_no_request) as tracker:
         with no_type_checks(), pytest.raises(rt.exceptions.InvalidUseError):
-            _collect(tracker.search_custom_fields(object_type=object_type, object_id=object_id))
+            _collect(tracker.custom_fields.search(object_type=object_type, object_id=object_id))
 
 
 def test_custom_field_values(rt_connection: Rt):
-    cf_id = rt_connection.create_custom_field(f'cf-{random_string()}', 'Select', 'RT::Queue-RT::Ticket', MaxValues=1)
+    cf_id = rt_connection.custom_fields.create(f'cf-{random_string()}', 'Select', 'RT::Queue-RT::Ticket', MaxValues=1)
 
-    high_id = rt_connection.add_custom_field_value(cf_id, 'High', SortOrder=1)
-    low_id = rt_connection.add_custom_field_value(cf_id, 'Low', Description='lowest', SortOrder=2)
+    high_id = rt_connection.custom_fields.add_value(cf_id, 'High', SortOrder=1)
+    low_id = rt_connection.custom_fields.add_value(cf_id, 'Low', Description='lowest', SortOrder=2)
 
-    values = _collect(rt_connection.get_custom_field_values(cf_id))
+    values = _collect(rt_connection.custom_fields.get_values(cf_id))
     assert {(int(value['id']), value['name']) for value in values} == {(high_id, 'High'), (low_id, 'Low')}
-    found = _collect(rt_connection.get_custom_field_values(cf_id, search_params=[{'field': 'Name', 'value': 'Low'}]))
+    found = _collect(rt_connection.custom_fields.get_values(cf_id, search_params=[{'field': 'Name', 'value': 'Low'}]))
     assert [int(value['id']) for value in found] == [low_id]
-    assert sorted((rt_connection.get_custom_field(cf_id))['Values']) == ['High', 'Low']
+    assert sorted((rt_connection.custom_fields.get(cf_id))['Values']) == ['High', 'Low']
 
-    value = rt_connection.get_custom_field_value(cf_id, low_id)
+    value = rt_connection.custom_fields.get_value(cf_id, low_id)
     assert (value['Name'], value['Description']) == ('Low', 'lowest')
 
-    assert (rt_connection.edit_custom_field_value(cf_id, low_id, Description='changed')).complete
-    assert (rt_connection.get_custom_field_value(cf_id, low_id))['Description'] == 'changed'
+    assert (rt_connection.custom_fields.edit_value(cf_id, low_id, Description='changed')).complete
+    assert (rt_connection.custom_fields.get_value(cf_id, low_id))['Description'] == 'changed'
 
-    rt_connection.delete_custom_field_value(cf_id, low_id)
-    assert [int(value['id']) for value in rt_connection.get_custom_field_values(cf_id)] == [high_id]
+    rt_connection.custom_fields.delete_value(cf_id, low_id)
+    assert [int(value['id']) for value in rt_connection.custom_fields.get_values(cf_id)] == [high_id]
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.get_custom_field_value(cf_id, low_id)
+        rt_connection.custom_fields.get_value(cf_id, low_id)
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.delete_custom_field_value(cf_id, low_id)
+        rt_connection.custom_fields.delete_value(cf_id, low_id)
 
     with pytest.raises(rt.exceptions.BadRequestError):
-        rt_connection.add_custom_field_value(cf_id, '')
+        rt_connection.custom_fields.add_value(cf_id, '')
 
 
 def test_apply_custom_field(rt_connection: Rt):
     queue_name, queue_id = _create_queue(rt_connection)
     other_queue_name, other_queue_id = _create_queue(rt_connection)
     name = f'cf-{random_string()}'
-    cf_id = rt_connection.create_custom_field(name, 'Freeform', 'RT::Queue-RT::Ticket', Queue=queue_name)
+    cf_id = rt_connection.custom_fields.create(name, 'Freeform', 'RT::Queue-RT::Ticket', Queue=queue_name)
 
     def applied_to() -> list[int]:
-        return sorted([item['ObjectId'] for item in rt_connection.get_custom_field_applies_to(cf_id)])
+        return sorted([item['ObjectId'] for item in rt_connection.custom_fields.get_applies_to(cf_id)])
 
     assert applied_to() == [queue_id]
 
-    assert (rt_connection.apply_custom_field(cf_id, other_queue_id)).complete
+    assert (rt_connection.custom_fields.apply(cf_id, other_queue_id)).complete
     assert applied_to() == sorted([queue_id, other_queue_id])
-    assert [int(item['id']) for item in rt_connection.search_custom_fields(object_type='queue', object_id=other_queue_id)] == [cf_id]
+    assert [int(item['id']) for item in rt_connection.custom_fields.search(object_type='queue', object_id=other_queue_id)] == [cf_id]
 
     with pytest.raises(rt.exceptions.ConflictError, match='already applied'):
-        rt_connection.apply_custom_field(cf_id, other_queue_id)
+        rt_connection.custom_fields.apply(cf_id, other_queue_id)
     with pytest.raises(rt.exceptions.BadRequestError):
-        rt_connection.apply_custom_field(cf_id, 999999)
+        rt_connection.custom_fields.apply(cf_id, 999999)
 
-    rt_connection.unapply_custom_field(cf_id, queue_id)
+    rt_connection.custom_fields.unapply(cf_id, queue_id)
     assert applied_to() == [other_queue_id]
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.unapply_custom_field(cf_id, queue_id)
+        rt_connection.custom_fields.unapply(cf_id, queue_id)
 
     # applied globally, the custom field is removed from all queues
-    rt_connection.apply_custom_field(cf_id, 0)
-    assert [item['ObjectId'] for item in rt_connection.get_custom_field_applies_to(cf_id)] == [0]
-    rt_connection.unapply_custom_field(cf_id, 0)
+    rt_connection.custom_fields.apply(cf_id, 0)
+    assert [item['ObjectId'] for item in rt_connection.custom_fields.get_applies_to(cf_id)] == [0]
+    rt_connection.custom_fields.unapply(cf_id, 0)
     assert applied_to() == []
 
 
 def test_custom_field_file(rt_connection: Rt):
     queue_name, _ = _create_queue(rt_connection)
-    cf_id = rt_connection.create_custom_field(f'cf-{random_string()}', 'Binary', 'RT::Queue-RT::Ticket', MaxValues=1, Queue=queue_name)
+    cf_id = rt_connection.custom_fields.create(f'cf-{random_string()}', 'Binary', 'RT::Queue-RT::Ticket', MaxValues=1, Queue=queue_name)
     content = b'binary \x00\x01\xff content'
-    ticket_id = rt_connection.create_ticket(queue_name, subject='File custom field')
+    ticket_id = rt_connection.tickets.create(queue_name, subject='File custom field')
 
-    rt_connection.edit_ticket(ticket_id, CustomFields={str(cf_id): Attachment('file.bin', 'application/octet-stream', content).to_dict()})
+    rt_connection.tickets.edit(ticket_id, CustomFields={str(cf_id): Attachment('file.bin', 'application/octet-stream', content).to_dict()})
 
-    ticket = rt_connection.get_ticket(ticket_id)
+    ticket = rt_connection.tickets.get(ticket_id)
     (value,) = [custom_field for custom_field in ticket['CustomFields'] if int(custom_field['id']) == cf_id][0]['values']
     assert value['filename'] == 'file.bin'
     value_id = value['_url'].rsplit('/', 1)[1]
-    assert rt_connection.get_custom_field_file(value_id) == content
+    assert rt_connection.custom_fields.get_file(value_id) == content
 
     with pytest.raises(rt.exceptions.NotAllowedError):
-        rt_connection.get_custom_field_file(999999)
+        rt_connection.custom_fields.get_file(999999)
 
 
 # --- rights --------------------------------------------------------------------------------------------------------
@@ -433,21 +437,21 @@ def test_rights_of_group(rt_connection: Rt):
     queue_name, queue_id = _create_queue(rt_connection)
     group_id = _create_group(rt_connection)
 
-    granted = rt_connection.grant_right('queue', queue_name, 'CreateTicket', group=group_id)
+    granted = rt_connection.rights.grant('queue', queue_name, 'CreateTicket', group=group_id)
     assert granted['Right'] == 'CreateTicket'
     assert int(granted['Group']['id']) == group_id
 
-    rights = _collect(rt_connection.get_rights('queue', queue_id, group=group_id))
+    rights = _collect(rt_connection.rights.get('queue', queue_id, group=group_id))
     assert [(right['Right'], int(right['Group']['id'])) for right in rights] == [('CreateTicket', group_id)]
 
     with pytest.raises(rt.exceptions.ConflictError, match='already has the right'):
-        rt_connection.grant_right('queue', queue_id, 'CreateTicket', group=group_id)
+        rt_connection.rights.grant('queue', queue_id, 'CreateTicket', group=group_id)
 
-    rt_connection.revoke_right('queue', queue_name, 'CreateTicket', group=group_id)
-    assert _collect(rt_connection.get_rights('queue', queue_id, group=group_id)) == []
+    rt_connection.rights.revoke('queue', queue_name, 'CreateTicket', group=group_id)
+    assert _collect(rt_connection.rights.get('queue', queue_id, group=group_id)) == []
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.revoke_right('queue', queue_id, 'CreateTicket', group=group_id)
+        rt_connection.rights.revoke('queue', queue_id, 'CreateTicket', group=group_id)
 
 
 def test_rights_of_user(rt_connection: Rt):
@@ -455,33 +459,33 @@ def test_rights_of_user(rt_connection: Rt):
     user_name, user_id = _create_user(rt_connection, Privileged=1)
 
     # users can be identified by name and ID
-    granted = rt_connection.grant_right('queue', queue_name, 'ShowTicket', user=user_name)
+    granted = rt_connection.rights.grant('queue', queue_name, 'ShowTicket', user=user_name)
     assert int(granted['User']['id']) == user_id
-    rt_connection.grant_right('queue', queue_name, 'SeeQueue', user=user_id)
+    rt_connection.rights.grant('queue', queue_name, 'SeeQueue', user=user_id)
 
-    by_name = {right['Right'] for right in rt_connection.get_rights('queue', queue_name, user=user_name)}
-    by_id = {right['Right'] for right in rt_connection.get_rights('queue', queue_name, user=user_id)}
+    by_name = {right['Right'] for right in rt_connection.rights.get('queue', queue_name, user=user_name)}
+    by_id = {right['Right'] for right in rt_connection.rights.get('queue', queue_name, user=user_id)}
     assert by_name == by_id == {'ShowTicket', 'SeeQueue'}
 
-    rt_connection.revoke_right('queue', queue_name, 'ShowTicket', user=user_id)
-    rt_connection.revoke_right('queue', queue_name, 'SeeQueue', user=user_name)
-    assert _collect(rt_connection.get_rights('queue', queue_name, user=user_name)) == []
+    rt_connection.rights.revoke('queue', queue_name, 'ShowTicket', user=user_id)
+    rt_connection.rights.revoke('queue', queue_name, 'SeeQueue', user=user_name)
+    assert _collect(rt_connection.rights.get('queue', queue_name, user=user_name)) == []
 
 
 def test_global_rights(rt_connection: Rt):
     group_id = _create_group(rt_connection)
 
-    rt_connection.grant_right('global', None, 'SeeQueue', group=group_id)
-    assert [right['Right'] for right in rt_connection.get_rights('global', group=group_id)] == ['SeeQueue']
+    rt_connection.rights.grant('global', None, 'SeeQueue', group=group_id)
+    assert [right['Right'] for right in rt_connection.rights.get('global', group=group_id)] == ['SeeQueue']
 
-    rt_connection.revoke_right('global', None, 'SeeQueue', group=group_id)
-    assert _collect(rt_connection.get_rights('global', group=group_id)) == []
+    rt_connection.rights.revoke('global', None, 'SeeQueue', group=group_id)
+    assert _collect(rt_connection.rights.get('global', group=group_id)) == []
 
 
 def test_rights_on_other_objects(rt_connection: Rt):
     group_id = _create_group(rt_connection)
     other_group_id = _create_group(rt_connection)
-    cf_id = rt_connection.create_custom_field(f'cf-{random_string()}', 'Freeform', 'RT::Queue-RT::Ticket')
+    cf_id = rt_connection.custom_fields.create(f'cf-{random_string()}', 'Freeform', 'RT::Queue-RT::Ticket')
 
     objects: list[tuple[RightsObjectType, int, str]] = [
         ('group', other_group_id, 'SeeGroup'),
@@ -490,16 +494,16 @@ def test_rights_on_other_objects(rt_connection: Rt):
         ('class', 1, 'ShowArticle'),
     ]
     for object_type, object_id, right in objects:
-        assert any(right in rights for rights in (rt_connection.get_available_rights(object_type, object_id)).values())
+        assert any(right in rights for rights in (rt_connection.rights.get_available(object_type, object_id)).values())
 
-        rt_connection.grant_right(object_type, object_id, right, group=group_id)
-        assert [item['Right'] for item in rt_connection.get_rights(object_type, object_id, group=group_id)] == [right]
-        rt_connection.revoke_right(object_type, object_id, right, group=group_id)
+        rt_connection.rights.grant(object_type, object_id, right, group=group_id)
+        assert [item['Right'] for item in rt_connection.rights.get(object_type, object_id, group=group_id)] == [right]
+        rt_connection.rights.revoke(object_type, object_id, right, group=group_id)
 
 
 def test_available_rights(rt_connection: Rt):
-    queue_rights = rt_connection.get_available_rights('queue', 1)
-    global_rights = rt_connection.get_available_rights('global')
+    queue_rights = rt_connection.rights.get_available('queue', 1)
+    global_rights = rt_connection.rights.get_available('global')
 
     assert 'CreateTicket' in {right for rights in queue_rights.values() for right in rights}
     assert 'SuperUser' in {right for rights in global_rights.values() for right in rights}
@@ -510,11 +514,11 @@ def test_rights_errors(rt_connection: Rt):
     group_id = _create_group(rt_connection)
 
     with pytest.raises(rt.exceptions.BadRequestError, match='Invalid right'):
-        rt_connection.grant_right('queue', 1, 'NoSuchRight', group=group_id)
+        rt_connection.rights.grant('queue', 1, 'NoSuchRight', group=group_id)
     with pytest.raises(rt.exceptions.BadRequestError):
-        rt_connection.grant_right('queue', 1, 'CreateTicket', group=999999)
+        rt_connection.rights.grant('queue', 1, 'CreateTicket', group=999999)
     with pytest.raises(rt.exceptions.NotFoundError):
-        _collect(rt_connection.get_rights('queue', 999999))
+        _collect(rt_connection.rights.get('queue', 999999))
 
 
 def test_rights_not_allowed(rt_connection: Rt):
@@ -522,7 +526,7 @@ def test_rights_not_allowed(rt_connection: Rt):
 
     with Rt(url=RT_URL, http_auth=httpx2.BasicAuth(user_name, 'password-of-test-user'), http_timeout=None) as tracker:
         with pytest.raises(rt.exceptions.NotAllowedError):
-            _collect(tracker.get_rights('queue', 1))
+            _collect(tracker.rights.get('queue', 1))
 
 
 @pytest.mark.parametrize(
@@ -540,19 +544,19 @@ def test_rights_invalid_use(object_type: typing.Any, object_id: int | str | None
     with _mock_client(_no_request) as tracker:
         with no_type_checks():
             with pytest.raises(rt.exceptions.InvalidUseError):
-                tracker.grant_right(object_type, object_id, 'CreateTicket', **principal)
+                tracker.rights.grant(object_type, object_id, 'CreateTicket', **principal)
             with pytest.raises(rt.exceptions.InvalidUseError):
-                tracker.revoke_right(object_type, object_id, 'CreateTicket', **principal)
+                tracker.rights.revoke(object_type, object_id, 'CreateTicket', **principal)
             if principal:
                 with pytest.raises(rt.exceptions.InvalidUseError):
-                    _collect(tracker.get_rights(object_type, object_id, **principal))
+                    _collect(tracker.rights.get(object_type, object_id, **principal))
 
 
 def test_create_custom_field_queue_for_other_lookup_type():
     # RT would silently create a ticket custom field instead
     with _mock_client(_no_request) as tracker:
         with pytest.raises(rt.exceptions.InvalidUseError, match='Queue'):
-            tracker.create_custom_field('Notes', 'Freeform', 'RT::Queue-RT::Ticket-RT::Transaction', Queue='General')
+            tracker.custom_fields.create('Notes', 'Freeform', 'RT::Queue-RT::Ticket-RT::Transaction', Queue='General')
 
 
 # --- catalogs and assets -------------------------------------------------------------------------------------------
@@ -561,57 +565,57 @@ def test_create_custom_field_queue_for_other_lookup_type():
 def _create_catalog(connection: Rt) -> tuple[str, int]:
     """Create a catalog with a random name and return its name and ID."""
     name = f'catalog-{random_string()}'
-    return name, connection.create_catalog(name, Description='python-rt test')
+    return name, connection.catalogs.create(name, Description='python-rt test')
 
 
 def test_catalog(rt_connection: Rt):
     name, catalog_id = _create_catalog(rt_connection)
 
-    catalog = rt_connection.get_catalog(name)
+    catalog = rt_connection.catalogs.get(name)
     assert (int(catalog['id']), catalog['Description'], catalog['Lifecycle']) == (catalog_id, 'python-rt test', 'assets')
 
-    found = _collect(rt_connection.search_catalogs(search_params=[{'field': 'Name', 'value': name}]))
+    found = _collect(rt_connection.catalogs.search(search_params=[{'field': 'Name', 'value': name}]))
     assert [(int(item['id']), item['Name'], item['Description']) for item in found] == [(catalog_id, name, 'python-rt test')]
-    assert catalog_id in [int(item['id']) for item in rt_connection.search_catalogs()]
-    all_catalogs = {int(item['id']): item for item in rt_connection.get_all_catalogs()}
+    assert catalog_id in [int(item['id']) for item in rt_connection.catalogs.search()]
+    all_catalogs = {int(item['id']): item for item in rt_connection.catalogs.all()}
     assert all_catalogs[catalog_id]['Name'] == name
 
-    assert (rt_connection.edit_catalog(name, Description='edited')).complete
-    assert (rt_connection.get_catalog(catalog_id))['Description'] == 'edited'
+    assert (rt_connection.catalogs.edit(name, Description='edited')).complete
+    assert (rt_connection.catalogs.get(catalog_id))['Description'] == 'edited'
 
 
 def test_catalog_errors(rt_connection: Rt):
     name, _ = _create_catalog(rt_connection)
 
     with pytest.raises(rt.exceptions.BadRequestError, match='unique'):
-        rt_connection.create_catalog(name)
+        rt_connection.catalogs.create(name)
     with pytest.raises(rt.exceptions.BadRequestError, match='lifecycle'):
-        rt_connection.create_catalog(f'catalog-{random_string()}', Lifecycle='invalid')
+        rt_connection.catalogs.create(f'catalog-{random_string()}', Lifecycle='invalid')
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_catalog(999999, Description='x')
+        rt_connection.catalogs.edit(999999, Description='x')
 
 
 def test_delete_catalog(rt_connection: Rt):
     name, catalog_id = _create_catalog(rt_connection)
     condition = [{'field': 'Name', 'value': name}]
 
-    rt_connection.delete_catalog(catalog_id)
+    rt_connection.catalogs.delete(catalog_id)
 
-    assert (rt_connection.get_catalog(catalog_id))['Disabled'] == '1'
-    assert catalog_id not in [int(item['id']) for item in rt_connection.get_all_catalogs()]
-    assert catalog_id in [int(item['id']) for item in rt_connection.get_all_catalogs(include_disabled=True)]
-    assert _collect(rt_connection.search_catalogs(search_params=condition)) == []
-    assert [int(item['id']) for item in rt_connection.search_catalogs(search_params=condition, include_disabled=True)] == [catalog_id]
+    assert (rt_connection.catalogs.get(catalog_id))['Disabled'] == '1'
+    assert catalog_id not in [int(item['id']) for item in rt_connection.catalogs.all()]
+    assert catalog_id in [int(item['id']) for item in rt_connection.catalogs.all(include_disabled=True)]
+    assert _collect(rt_connection.catalogs.search(search_params=condition)) == []
+    assert [int(item['id']) for item in rt_connection.catalogs.search(search_params=condition, include_disabled=True)] == [catalog_id]
 
 
 def test_search_assets_raw_query(rt_connection: Rt):
     catalog_name, catalog_id = _create_catalog(rt_connection)
     asset_name = f'Grüße {random_string()}'
-    asset_id = rt_connection.create_asset(asset_name, catalog_id)
-    rt_connection.create_asset(f'other {random_string()}', catalog_id)
+    asset_id = rt_connection.assets.create(asset_name, catalog_id)
+    rt_connection.assets.create(f'other {random_string()}', catalog_id)
 
     query = f"Catalog = '{catalog_name}' AND Name = '{asset_name}'"
-    found = [(int(asset['id']), asset['Name']) for asset in rt_connection.search_assets(raw_query=query, fields='Name')]
+    found = [(int(asset['id']), asset['Name']) for asset in rt_connection.assets.search(raw_query=query, fields='Name')]
 
     assert found == [(asset_id, asset_name)]
 
@@ -624,7 +628,7 @@ def test_search_assets_raw_query_request():
         return httpx2.Response(200, json={'page': 1, 'per_page': 100, 'pages': 0, 'total': 0, 'count': 0, 'items': []})
 
     with _mock_client(handler) as tracker:
-        _collect(tracker.search_assets(raw_query="Status = 'new'"))
+        _collect(tracker.assets.search(raw_query="Status = 'new'"))
 
     (request,) = requests
     assert request.method == 'POST'
@@ -644,23 +648,23 @@ def test_search_assets_raw_query_request():
 def test_search_assets_raw_query_invalid_use(arguments: dict[str, typing.Any]):
     with _mock_client(_no_request) as tracker:
         with pytest.raises(rt.exceptions.InvalidUseError):
-            _collect(tracker.search_assets(**arguments))
+            _collect(tracker.assets.search(**arguments))
 
 
 def test_delete_asset(rt_connection: Rt):
     _, catalog_id = _create_catalog(rt_connection)
     asset_name = f'asset-{random_string()}'
-    asset_id = rt_connection.create_asset(asset_name, catalog_id)
+    asset_id = rt_connection.assets.create(asset_name, catalog_id)
 
-    rt_connection.delete_asset(asset_id)
+    rt_connection.assets.delete(asset_id)
 
-    assert (rt_connection.get_asset(asset_id))['Status'] == 'deleted'
-    assert _collect(rt_connection.search_assets(catalog_id=catalog_id, search_params=[{'field': 'Name', 'value': asset_name}])) == []
+    assert (rt_connection.assets.get(asset_id))['Status'] == 'deleted'
+    assert _collect(rt_connection.assets.search(catalog_id=catalog_id, search_params=[{'field': 'Name', 'value': asset_name}])) == []
     # deleting an asset again is no error
-    rt_connection.delete_asset(asset_id)
+    rt_connection.assets.delete(asset_id)
 
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.delete_asset(999999)
+        rt_connection.assets.delete(999999)
 
 
 @pytest.mark.parametrize(
@@ -673,7 +677,7 @@ def test_delete_asset(rt_connection: Rt):
 def test_delete_asset_refused(message: str, expected: type[rt.exceptions.RtError]):
     with _mock_client(lambda request: httpx2.Response(200, json=[message])) as tracker:
         with pytest.raises(expected, match=message):
-            tracker.delete_asset(1)
+            tracker.assets.delete(1)
 
 
 # --- queues and custom roles ---------------------------------------------------------------------------------------
@@ -681,46 +685,46 @@ def test_delete_asset_refused(message: str, expected: type[rt.exceptions.RtError
 
 def test_search_queues(rt_connection: Rt):
     name, queue_id = _create_queue(rt_connection)
-    rt_connection.edit_queue(queue_id, Description='searched')
+    rt_connection.queues.edit(queue_id, Description='searched')
 
-    found = _collect(rt_connection.search_queues(search_params=[{'field': 'Name', 'value': name}]))
+    found = _collect(rt_connection.queues.search(search_params=[{'field': 'Name', 'value': name}]))
     assert [(int(item['id']), item['Name'], item['Description'], item['Lifecycle']) for item in found] == [(queue_id, name, 'searched', 'default')]
 
-    all_queues = [int(item['id']) for item in rt_connection.search_queues()]
+    all_queues = [int(item['id']) for item in rt_connection.queues.search()]
     assert queue_id in all_queues
     assert 1 in all_queues
 
     # several conditions on the same field are combined with AND for queues, unless OR is requested
     conditions: list[dict[str, typing.Any]] = [{'field': 'Name', 'value': name}, {'field': 'Name', 'value': 'General'}]
-    assert _collect(rt_connection.search_queues(search_params=conditions)) == []
+    assert _collect(rt_connection.queues.search(search_params=conditions)) == []
     conditions[1]['entry_aggregator'] = 'OR'
-    assert sorted([int(item['id']) for item in rt_connection.search_queues(search_params=conditions)]) == sorted([1, queue_id])
+    assert sorted([int(item['id']) for item in rt_connection.queues.search(search_params=conditions)]) == sorted([1, queue_id])
 
 
 def test_search_queues_disabled(rt_connection: Rt):
     name, queue_id = _create_queue(rt_connection)
-    rt_connection.delete_queue(queue_id)
+    rt_connection.queues.delete(queue_id)
     condition = [{'field': 'Name', 'value': name}]
 
-    assert _collect(rt_connection.search_queues(search_params=condition)) == []
-    assert [int(item['id']) for item in rt_connection.search_queues(search_params=condition, include_disabled=True)] == [queue_id]
+    assert _collect(rt_connection.queues.search(search_params=condition)) == []
+    assert [int(item['id']) for item in rt_connection.queues.search(search_params=condition, include_disabled=True)] == [queue_id]
 
 
 @requires_rt_setup
 def test_custom_roles(rt_connection: Rt):
-    found = _collect(rt_connection.search_custom_roles(search_params=[{'field': 'Name', 'value': RT_CUSTOM_ROLE}]))
+    found = _collect(rt_connection.custom_roles.search(search_params=[{'field': 'Name', 'value': RT_CUSTOM_ROLE}]))
     assert [(item['Name'], item['MaxValues'], item['LookupType']) for item in found] == [(RT_CUSTOM_ROLE, '1', 'RT::Queue-RT::Ticket')]
 
     role_id = found[0]['id']
-    assert role_id in [item['id'] for item in rt_connection.search_custom_roles()]
+    assert role_id in [item['id'] for item in rt_connection.custom_roles.search()]
 
-    role = rt_connection.get_custom_role(role_id)
+    role = rt_connection.custom_roles.get(role_id)
     assert (role['Name'], role['Disabled']) == (RT_CUSTOM_ROLE, '0')
 
 
 def test_custom_role_not_found(rt_connection: Rt):
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.get_custom_role(999999)
+        rt_connection.custom_roles.get(999999)
 
 
 # --- classes and articles ------------------------------------------------------------------------------------------
@@ -729,127 +733,127 @@ def test_custom_role_not_found(rt_connection: Rt):
 def _create_class(connection: Rt) -> tuple[str, int]:
     """Create a class with a random name and return its name and ID."""
     name = f'class-{random_string()}'
-    return name, connection.create_class(name, Description='python-rt test')
+    return name, connection.classes.create(name, Description='python-rt test')
 
 
 def test_class(rt_connection: Rt):
     name, class_id = _create_class(rt_connection)
 
-    article_class = rt_connection.get_class(name)
+    article_class = rt_connection.classes.get(name)
     assert (int(article_class['id']), article_class['Description']) == (class_id, 'python-rt test')
     # RT applies the custom field for the text of articles to new classes
     assert 'Content' in [field['name'] for field in article_class['ArticleCustomFields']]
 
-    found = _collect(rt_connection.search_classes(search_params=[{'field': 'Name', 'value': name}]))
+    found = _collect(rt_connection.classes.search(search_params=[{'field': 'Name', 'value': name}]))
     assert [(int(item['id']), item['Name'], item['Description']) for item in found] == [(class_id, name, 'python-rt test')]
-    assert class_id in [int(item['id']) for item in rt_connection.search_classes()]
-    assert class_id in [int(item['id']) for item in rt_connection.get_all_classes()]
+    assert class_id in [int(item['id']) for item in rt_connection.classes.search()]
+    assert class_id in [int(item['id']) for item in rt_connection.classes.all()]
 
-    assert (rt_connection.edit_class(class_id, Description='edited')).complete
+    assert (rt_connection.classes.edit(class_id, Description='edited')).complete
 
     with pytest.raises(rt.exceptions.BadRequestError):
-        rt_connection.create_class(name)
+        rt_connection.classes.create(name)
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.get_class(999999)
+        rt_connection.classes.get(999999)
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_class(999999, Description='x')
+        rt_connection.classes.edit(999999, Description='x')
 
 
 def test_delete_class(rt_connection: Rt):
     name, class_id = _create_class(rt_connection)
     condition = [{'field': 'Name', 'value': name}]
 
-    rt_connection.delete_class(name)
+    rt_connection.classes.delete(name)
 
-    assert (rt_connection.get_class(class_id))['Disabled'] == '1'
-    assert class_id not in [int(item['id']) for item in rt_connection.get_all_classes()]
-    assert class_id in [int(item['id']) for item in rt_connection.get_all_classes(include_disabled=True)]
-    assert _collect(rt_connection.search_classes(search_params=condition)) == []
-    assert [int(item['id']) for item in rt_connection.search_classes(search_params=condition, include_disabled=True)] == [class_id]
+    assert (rt_connection.classes.get(class_id))['Disabled'] == '1'
+    assert class_id not in [int(item['id']) for item in rt_connection.classes.all()]
+    assert class_id in [int(item['id']) for item in rt_connection.classes.all(include_disabled=True)]
+    assert _collect(rt_connection.classes.search(search_params=condition)) == []
+    assert [int(item['id']) for item in rt_connection.classes.search(search_params=condition, include_disabled=True)] == [class_id]
     # disabling a class again is no error
-    rt_connection.delete_class(class_id)
+    rt_connection.classes.delete(class_id)
 
 
 def test_article(rt_connection: Rt):
     class_name, class_id = _create_class(rt_connection)
     name = f'article-{random_string()}'
 
-    article_id = rt_connection.create_article(name, class_name, Summary='summary', CustomFields={'Content': 'Text of the article'})
+    article_id = rt_connection.articles.create(name, class_name, Summary='summary', CustomFields={'Content': 'Text of the article'})
 
-    article = rt_connection.get_article(article_id)
+    article = rt_connection.articles.get(article_id)
     assert (article['Name'], article['Summary'], int(article['Class']['id'])) == (name, 'summary', class_id)
     assert [field['values'] for field in article['CustomFields'] if field['name'] == 'Content'] == [['Text of the article']]
 
-    found = _collect(rt_connection.search_articles(search_params=[{'field': 'Class', 'value': class_id}]))
+    found = _collect(rt_connection.articles.search(search_params=[{'field': 'Class', 'value': class_id}]))
     assert [(int(item['id']), item['Name'], item['Summary'], int(item['Class']['id'])) for item in found] == [(article_id, name, 'summary', class_id)]
-    assert article_id in [int(item['id']) for item in rt_connection.search_articles()]
+    assert article_id in [int(item['id']) for item in rt_connection.articles.search()]
 
-    assert (rt_connection.edit_article(article_id, Summary='changed', CustomFields={'Content': 'New text'})).complete
-    article = rt_connection.get_article(article_id)
+    assert (rt_connection.articles.edit(article_id, Summary='changed', CustomFields={'Content': 'New text'})).complete
+    article = rt_connection.articles.get(article_id)
     assert [field['values'] for field in article['CustomFields'] if field['name'] == 'Content'] == [['New text']]
 
-    history = [item['Type'] for item in rt_connection.get_article_history(article_id)]
+    history = [item['Type'] for item in rt_connection.articles.history(article_id)]
     assert history[0] == 'Create'
     assert len(history) >= 3
-    assert _collect(rt_connection.get_article_history(999999)) == []
+    assert _collect(rt_connection.articles.history(999999)) == []
 
 
 def test_article_errors(rt_connection: Rt):
     class_name, _ = _create_class(rt_connection)
     name = f'article-{random_string()}'
-    rt_connection.create_article(name, class_name)
+    rt_connection.articles.create(name, class_name)
 
     # names are unique per class
     with pytest.raises(rt.exceptions.BadRequestError):
-        rt_connection.create_article(name, class_name)
+        rt_connection.articles.create(name, class_name)
     with pytest.raises(rt.exceptions.NotAllowedError):
-        rt_connection.create_article(name, f'missing-{random_string()}')
+        rt_connection.articles.create(name, f'missing-{random_string()}')
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.get_article(999999)
+        rt_connection.articles.get(999999)
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_article(999999, Summary='x')
+        rt_connection.articles.edit(999999, Summary='x')
 
 
 def test_delete_article(rt_connection: Rt):
     class_name, class_id = _create_class(rt_connection)
-    article_id = rt_connection.create_article(f'article-{random_string()}', class_name)
+    article_id = rt_connection.articles.create(f'article-{random_string()}', class_name)
     condition: JSONSearchParams = [{'field': 'Class', 'value': class_id}]
 
-    rt_connection.delete_article(article_id)
+    rt_connection.articles.delete(article_id)
 
-    assert (rt_connection.get_article(article_id))['Disabled'] == '1'
-    assert _collect(rt_connection.search_articles(search_params=condition)) == []
-    assert [int(item['id']) for item in rt_connection.search_articles(search_params=condition, include_disabled=True)] == [article_id]
+    assert (rt_connection.articles.get(article_id))['Disabled'] == '1'
+    assert _collect(rt_connection.articles.search(search_params=condition)) == []
+    assert [int(item['id']) for item in rt_connection.articles.search(search_params=condition, include_disabled=True)] == [article_id]
 
     # RT fails with HTTP status 500 for an article which is already deleted
     with pytest.raises(rt.exceptions.UnexpectedResponseError):
-        rt_connection.delete_article(article_id)
+        rt_connection.articles.delete(article_id)
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.delete_article(999999)
+        rt_connection.articles.delete(999999)
 
 
 def test_rights_of_unknown_user(rt_connection: Rt):
     queue_name, _ = _create_queue(rt_connection)
     group_id = _create_group(rt_connection)
-    rt_connection.grant_right('queue', queue_name, 'CreateTicket', group=group_id)
-    rt_connection.grant_right('queue', queue_name, 'ShowTicket', user=RT_USER)
+    rt_connection.rights.grant('queue', queue_name, 'CreateTicket', group=group_id)
+    rt_connection.rights.grant('queue', queue_name, 'ShowTicket', user=RT_USER)
 
     # RT ignores the filter for a user which does not exist and returns all rights
-    assert _collect(rt_connection.get_rights('queue', queue_name, user=f'missing-{random_string()}')) == []
+    assert _collect(rt_connection.rights.get('queue', queue_name, user=f'missing-{random_string()}')) == []
     # users are identified by name case insensitively, as by RT, and by ID
-    root_id = int((rt_connection.get_user(RT_USER))['id'])
+    root_id = int((rt_connection.users.get(RT_USER))['id'])
     for user in (RT_USER, RT_USER.upper(), root_id, str(root_id)):
-        assert [right['Right'] for right in rt_connection.get_rights('queue', queue_name, user=user)] == ['ShowTicket']
+        assert [right['Right'] for right in rt_connection.rights.get('queue', queue_name, user=user)] == ['ShowTicket']
 
 
 def test_add_system_group_as_member(rt_connection: Rt):
     group_id = _create_group(rt_connection)
     # the system group Privileged, which RT grants rights globally by default
-    principal_ids = {int(item['Group']['id']) for item in rt_connection.get_rights('global') if item.get('Group', {}).get('Name') == 'Privileged'}
+    principal_ids = {int(item['Group']['id']) for item in rt_connection.rights.get('global') if item.get('Group', {}).get('Name') == 'Privileged'}
     (principal_id,) = principal_ids
 
     with pytest.raises(rt.exceptions.NotFoundError, match='not found'):
-        rt_connection.add_group_member(group_id, principal_id)
+        rt_connection.groups.add_member(group_id, principal_id)
 
 
 # --- links of assets -----------------------------------------------------------------------------------------------
@@ -857,52 +861,52 @@ def test_add_system_group_as_member(rt_connection: Rt):
 
 def test_asset_links(rt_connection: Rt):
     _, catalog_id = _create_catalog(rt_connection)
-    asset_id = rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
-    other_asset_id = rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
-    ticket_id = rt_connection.create_ticket('General', subject='Asset links', content='Test')
+    asset_id = rt_connection.assets.create(f'asset-{random_string()}', catalog_id)
+    other_asset_id = rt_connection.assets.create(f'asset-{random_string()}', catalog_id)
+    ticket_id = rt_connection.tickets.create('General', subject='Asset links', content='Test')
 
-    assert (rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id)).complete
-    rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}')
-    rt_connection.edit_asset_link(asset_id, 'RefersTo', 'https://example.com/manual.pdf')
+    assert (rt_connection.assets.edit_link(asset_id, 'RefersTo', ticket_id)).complete
+    rt_connection.assets.edit_link(asset_id, 'Parent', f'asset:{other_asset_id}')
+    rt_connection.assets.edit_link(asset_id, 'RefersTo', 'https://example.com/manual.pdf')
 
-    links = sorted((link['ref'], link['type'], link['_url']) for link in rt_connection.get_asset_links(asset_id))
+    links = sorted((link['ref'], link['type'], link['_url']) for link in rt_connection.assets.get_links(asset_id))
     assert links == [
         ('parent', 'asset', f'{RT_URL}asset/{other_asset_id}'),
         ('refers-to', 'external', 'https://example.com/manual.pdf'),
         ('refers-to', 'ticket', f'{RT_URL}ticket/{ticket_id}'),
     ]
     # the links of the ticket show the asset
-    assert [(link['ref'], link['type'], int(link['id'])) for link in rt_connection.get_links(ticket_id)] == [('referred-to-by', 'asset', asset_id)]
+    assert [(link['ref'], link['type'], int(link['id'])) for link in rt_connection.tickets.get_links(ticket_id)] == [('referred-to-by', 'asset', asset_id)]
 
     # adding an existing link and deleting a missing one change nothing
-    assert (rt_connection.edit_asset_link(asset_id, 'RefersTo', ticket_id)).complete
-    rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True)
-    assert (rt_connection.edit_asset_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True)).complete
-    assert len(rt_connection.get_asset_links(asset_id)) == 2
+    assert (rt_connection.assets.edit_link(asset_id, 'RefersTo', ticket_id)).complete
+    rt_connection.assets.edit_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True)
+    assert (rt_connection.assets.edit_link(asset_id, 'Parent', f'asset:{other_asset_id}', delete=True)).complete
+    assert len(rt_connection.assets.get_links(asset_id)) == 2
 
 
 def test_asset_links_refused(rt_connection: Rt):
     _, catalog_id = _create_catalog(rt_connection)
-    asset_id = rt_connection.create_asset(f'asset-{random_string()}', catalog_id)
+    asset_id = rt_connection.assets.create(f'asset-{random_string()}', catalog_id)
 
     with pytest.raises(rt.exceptions.NotFoundError, match="Couldn't resolve"):
-        rt_connection.edit_asset_link(asset_id, 'RefersTo', 'asset:999999')
+        rt_connection.assets.edit_link(asset_id, 'RefersTo', 'asset:999999')
     with pytest.raises(rt.exceptions.InvalidUseError, match='Link could not be created'):
-        rt_connection.edit_asset_link(asset_id, 'RefersTo', f'asset:{asset_id}')
+        rt_connection.assets.edit_link(asset_id, 'RefersTo', f'asset:{asset_id}')
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.edit_asset_link(999999, 'RefersTo', 1)
+        rt_connection.assets.edit_link(999999, 'RefersTo', 1)
     with pytest.raises(rt.exceptions.NotFoundError):
-        rt_connection.get_asset_links(999999)
+        rt_connection.assets.get_links(999999)
     with no_type_checks(), pytest.raises(rt.exceptions.InvalidUseError, match='Unsupported link name'):
-        rt_connection.edit_asset_link(asset_id, 'MergedInto', 1)  # type: ignore[arg-type]
+        rt_connection.assets.edit_link(asset_id, 'MergedInto', 1)  # type: ignore[arg-type]
 
 
 def test_links_ignored_by_rt():
     # RT 5.0.0 ignores links and MergeInto in updates and returns no messages
     with _mock_client(lambda request: httpx2.Response(200, json=[])) as tracker:
         with pytest.raises(rt.exceptions.UnexpectedResponseError, match='RT 5.0.1'):
-            tracker.edit_link(1, 'DependsOn', 2)
+            tracker.tickets.edit_link(1, 'DependsOn', 2)
         with pytest.raises(rt.exceptions.UnexpectedResponseError, match='RT 5.0.1'):
-            tracker.edit_asset_link(1, 'RefersTo', 2)
+            tracker.assets.edit_link(1, 'RefersTo', 2)
         with pytest.raises(rt.exceptions.UnexpectedResponseError, match='RT 5.0.1'):
-            tracker.merge_ticket(1, 2)
+            tracker.tickets.merge(1, 2)

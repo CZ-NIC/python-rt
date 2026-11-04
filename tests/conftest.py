@@ -50,10 +50,12 @@ _SYNC_TEST_FILES = frozenset({'test_basic.py', 'test_tickets.py', 'test_rest2_fi
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Mark the tests of the sync client with the marker "sync"."""
+    """Mark the tests of the sync client with the marker "sync", and the tests which need a running RT with "live"."""
     for item in items:
         if item.path.name in _SYNC_TEST_FILES:
             item.add_marker(pytest.mark.sync)
+        if {'async_rt_connection', 'rt_connection'} & set(getattr(item, 'fixturenames', ())) or item.path.name == 'test_rest1.py':
+            item.add_marker(pytest.mark.live)
 
 
 # --- messages of RT -----------------------------------------------------------------------------------------------
@@ -66,12 +68,12 @@ LIVE_MESSAGES: set[str] = set()
 @pytest.fixture(scope='session', autouse=True)
 def record_messages_of_rt() -> typing.Iterator[None]:
     """Record the status messages RT returns; fail at the end of the session for messages which are not in the catalog."""
-    import rt.rest2  # noqa: PLC0415
-    import rt.rest2_async  # noqa: PLC0415
+    import rt._rest2.transport  # noqa: PLC0415
+    import rt._rest2_async.transport  # noqa: PLC0415
     from rt._messages import classify  # noqa: PLC0415
 
     def patch(client_class: type) -> typing.Callable[[], None]:
-        original = client_class.__dict__['_list_result']
+        original = client_class.__dict__['list_result']
 
         def patched(cls: type, response: typing.Any) -> list[str]:
             result: list[str] = original.__func__(cls, response)
@@ -79,11 +81,11 @@ def record_messages_of_rt() -> typing.Iterator[None]:
                 LIVE_MESSAGES.update(result)
             return result
 
-        client_class._list_result = classmethod(patched)  # type: ignore[attr-defined]
+        client_class.list_result = classmethod(patched)  # type: ignore[attr-defined]
 
-        return lambda: setattr(client_class, '_list_result', original)
+        return lambda: setattr(client_class, 'list_result', original)
 
-    restore = [patch(rt.rest2.Rt), patch(rt.rest2_async.AsyncRt)]
+    restore = [patch(rt._rest2.transport._Transport), patch(rt._rest2_async.transport._AsyncTransport)]
 
     yield
 

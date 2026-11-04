@@ -11,8 +11,9 @@ is not classified (never guessed). Messages of RT which are not in the
 catalog are *unrecognized*: they are neither a success nor a refusal for the library, see :py:class:`~rt.common.ActionResult`.
 
 Maintenance: add the msgid of a new message with its kind. ``tests/test_message_catalog.py`` checks that every msgid
-still exists in the ``rt.pot`` of the RT image used for the tests (RT rewords messages from time to time) and that the
-messages received from RT in the tests are in the catalog.
+still exists in the ``rt.pot`` of the RT image used for the tests (RT rewords messages from time to time), that the
+messages received from RT in the tests are in the catalog, and that every msgid of the record code of RT is either in the
+catalog or reviewed with a reason in ``tests/rt_messages_not_in_catalog.json`` (new messages of a newer RT are listed).
 """
 
 import enum
@@ -231,6 +232,74 @@ MESSAGES: dict[str, Kind] = {
     '%1 already has the right %2 on %3 %4': R,
     'Right could not be revoked': R,
     'System error. Right not granted.': R,
+    # --- found in the review of the messages of the record code of RT 6.0.4 which REST2 changes can return
+    # (2026-11-04: methods reachable from REST2 updates, refusals are "return (0, ...)"; "live" = returned in the tests)
+    # successes: descriptions of the transactions of changes, returned by RT::Record::_Set
+    'Worked %quant(%1,minute,minutes) on %2': S,  # live: tickets.edit(TimeWorked=...)
+    'Worked %quant(%1,hour,hours) (%quant(%2,minute,minutes)) on %3': S,
+    '%1 worked %quant(%2,minute,minutes) on %3': S,
+    '%1 worked %quant(%2,hour,hours) (%quant(%3,minute,minutes)) on %4': S,
+    'Adjusted time worked by %quant(%1,minute,minutes) on %2': S,  # live: tickets.edit(TimeWorked=...) lower than before
+    'Adjusted time worked by %quant(%1,minute,minutes) on %2 for %3': S,
+    'Member deleted': S,  # live: assets.edit(HeldBy=...) removes the previous member
+    'Custom field value deleted': S,
+    'Picture updated': S,
+    # not found
+    'Group %1 not found': N,  # REST2 GroupMembers.pm and UserGroups.pm
+    "%1 appears to be a local object, but can't be found in the database": N,
+    "Couldn't load group: %1": N,
+    "Couldn't load or create user: %1": N,
+    "Couldn't load user: %1": N,
+    # denied
+    'Permission Denied: Cannot save articles containing code with DisallowExecuteCode enabled.': D,
+    # refused: fields of records (messages of DBIx::SearchBuilder, translated by RT::Record::Update)
+    'Immutable field': R,
+    'Invalid data': R,
+    'Nonexistent field?': R,
+    'No column specified': R,
+    "Couldn't find row": R,
+    'No value sent to _Set!': R,
+    'The new value has been set.': S,
+    'Missing a primary key?: %1': R,
+    # refused: custom fields
+    'Invalid pattern: %1': R,  # live
+    'Invalid Render Type for custom field of type %1': R,  # live
+    'This custom field has no Render Types': R,  # live
+    'Must have two values for Render Type Checkbox': R,
+    "Can't render as a %1 when basing categories on another custom field.  Please use another render type.": R,
+    'Invalid Custom Field values source': R,  # live
+    'This Custom Field can not have list of values': R,  # live
+    'Invalid custom field values canonicalizer': R,
+    'This custom field can not have a canonicalizer': R,  # live
+    'No name provided': R,
+    "Couldn't create record: %1": R,
+    "Couldn't create a transaction: %1": R,
+    # refused: users, groups, queues
+    'empty name': R,  # live: users.edit(Name='')
+    'Image too large, max is %1': R,
+    'Could not set password': R,
+    'No password set': R,
+    'Password must include %1': R,
+    'Password must not contain the username': R,
+    'Password needs to be at least %quant(%1,character,characters) long': R,
+    "Failed to find 'Privileged' users pseudogroup.": R,
+    "Failed to find 'Unprivileged' users pseudogroup": R,
+    'Could not update column %1: %2': R,
+    "Couldn't remove previous member: %1": R,
+    "'%1' is not a valid name.": R,
+    'Queue already exists': R,
+    'One, and only one, of Principal/PrincipalId/User/Group is required': R,
+    # refused: status, lifecycle, queue, messages, links
+    "You can't change status from '%1' to '%2'.": R,
+    '%1 %2 is disabled': R,
+    "Couldn't load copy of %1 #%2": R,
+    'Mapping between lifecycle %1 and %2 is incomplete. Contact your system administrator.': R,
+    'There is no mapping for statuses between lifecycle %1 and %2. Contact your system administrator.': R,
+    "Couldn't load copy of ticket #%1.": R,
+    'Message could not be recorded': R,
+    'No message attached': R,
+    'Cannot add link to plain number': R,  # live: articles.edit(RefersTo=999999)
+    "Can't link to '%1'": R,
 }
 
 # Exact messages which are not in rt.pot: joined by RT ("Link could not be created: " and the message of the refusal) or written by
@@ -240,6 +309,14 @@ EXACT: dict[str, Kind] = {
     'Link could not be deleted: Permission denied': D,
     'Custom fields updated': S,  # REST2, Resource/Message.pm: custom fields of the transaction of a reply or comment
     'Asset deleted': S,  # REST2: deleting an asset sets the status deleted
+    # descriptions "[_1] disabled" and "[_1] enabled" of the transactions of RT::Record::_Set, with the field Disabled
+    # (live: catalogs.edit(Disabled=1)); not as templates, which would match "%1 %2 is disabled" as well
+    'Disabled disabled': S,
+    'Disabled enabled': S,
+    # descriptions "[_1] added/changed/deleted" of RT::Record::_Set, only for the Description of tickets (live: tickets.edit)
+    'Description added': S,
+    'Description changed': S,
+    'Description deleted': S,
 }
 
 # Regular expressions for messages which are not in rt.pot and contain values (case insensitive, for the whole message)
@@ -248,12 +325,14 @@ PATTERNS: dict[str, Kind] = {
     r'(?:ticket|asset|article|uri) \S+ (?:no longer )?(?:depends on|depended on by|refers to|referred to by|member of|has member) .+\.': S,
     # REST2: a custom field of the transaction of a reply or comment can not be loaded
     r'unable to load transaction custom field: .+': R,
-    # observed with RT 6.0 when a group does not exist: "Group 4 not found"
-    r'group \S+ not found': N,
 }
 
 # RT adds the type and the ID of the changed record to the messages of a change: "Ticket 703: Subject changed from ..."
 _PREFIX = r'(?:[A-Za-z]+ \d+: )?'
+
+
+# Placeholders of the msgids: %1, %2... and functions of the localization of RT, e.g. %quant(%1,minute,minutes) for "15 minutes"
+_PLACEHOLDER = re.compile(r'%[a-z]+\([^)]*\)|%\d+')
 
 
 def _compile(regex: str) -> re.Pattern[str]:
@@ -262,7 +341,7 @@ def _compile(regex: str) -> re.Pattern[str]:
 
 # (pattern of the whole message, has placeholders, kind)
 _COMPILED: list[tuple[re.Pattern[str], bool, Kind]] = (
-    [(_compile('.+'.join(re.escape(part) for part in re.split(r'%\d+', msgid))), '%' in msgid, kind) for msgid, kind in MESSAGES.items()]
+    [(_compile('.+'.join(re.escape(part) for part in _PLACEHOLDER.split(msgid))), '%' in msgid, kind) for msgid, kind in MESSAGES.items()]
     + [(_compile(re.escape(message)), False, kind) for message, kind in EXACT.items()]
     + [(_compile(pattern), True, kind) for pattern, kind in PATTERNS.items()]
 )

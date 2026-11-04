@@ -463,8 +463,25 @@ _SEARCHABLE_FIELDS: dict[str, frozenset[str]] = {
     ),
 }
 
+# Lookup types of the custom fields which RT uses for conditions on custom fields of a JSON search, by endpoint
+# (CustomFieldLookupType of the record class of the collection, RT 6.0.4).
+_CUSTOM_FIELD_LOOKUP_TYPES: dict[str, str] = {
+    'users': 'RT::User',
+    'groups': 'RT::Group',
+    'queues': 'RT::Queue',
+    'assets': 'RT::Catalog-RT::Asset',
+    'catalogs': 'RT::Catalog',
+    'articles': 'RT::Class-RT::Article',
+    'classes': 'RT::Class',
+    'customfields': 'RT::CustomField',
+    'customroles': 'RT::CustomRole',
+    'customfieldvalues': 'RT::CustomFieldValue',
+    'transactions': 'RT::Queue-RT::Ticket-RT::Transaction',
+    'attachments': 'RT::Attachment',
+}
+
 # Conditions on custom fields, e.g. CF.{Severity}, which RT handles separately (as in RT::REST2::Resource::Collection::QueryByJSON).
-_CUSTOM_FIELD_CONDITION = re.compile(r'(?:CF|CustomField)\.\{.+\}', re.IGNORECASE)
+_CUSTOM_FIELD_CONDITION = re.compile(r'(?:CF|CustomField)\.\{(?P<name>.+)\}', re.IGNORECASE)
 
 
 def _unknown_fields(names: collections.abc.Iterable[str], known: frozenset[str], *, conditions: bool = False) -> list[str]:

@@ -83,6 +83,11 @@ def test_refusals_of_partial_changes(rt_connection: Rt):
     ticket_id = tracker.tickets.create(RT_QUEUE, subject=f'Partial {random_string()}', content='Test')
     queue_id = tracker.queues.create(f'queue-{random_string()}')
     custom_field_id = tracker.custom_fields.create(f'cf-{random_string()}', 'Freeform', 'RT::Queue-RT::Ticket')
+    select_field_id = tracker.custom_fields.create(f'cf-{random_string()}', 'Select', 'RT::Queue-RT::Ticket')
+    user_name = f'user-{random_string()}'
+    tracker.users.create(user_name, f'{user_name}@example.com')
+    class_id = tracker.classes.create(f'class-{random_string()}')
+    article_id = tracker.articles.create(f'article-{random_string()}', class_id)
 
     cases: list[Case] = [
         ('invalid status', lambda: tracker.tickets.edit(ticket_id, Status='invalid'), rt.exceptions.InvalidUseError),
@@ -90,6 +95,14 @@ def test_refusals_of_partial_changes(rt_connection: Rt):
         ('missing queue', lambda: tracker.tickets.edit(ticket_id, Queue=f'Support Desk {random_string()}'), rt.exceptions.NotFoundError),
         ('invalid lifecycle', lambda: tracker.queues.edit(queue_id, Lifecycle='invalid'), rt.exceptions.InvalidUseError),
         ('invalid type of a custom field', lambda: tracker.custom_fields.edit(custom_field_id, Type='Invalid'), rt.exceptions.InvalidUseError),
+        ('invalid pattern of a custom field', lambda: tracker.custom_fields.edit(custom_field_id, Pattern='(['), rt.exceptions.InvalidUseError),
+        ('render type of a freeform field', lambda: tracker.custom_fields.edit(custom_field_id, RenderType='Dropdown'), rt.exceptions.InvalidUseError),
+        ('invalid render type', lambda: tracker.custom_fields.edit(select_field_id, RenderType='Invalid'), rt.exceptions.InvalidUseError),
+        ('values of a freeform field', lambda: tracker.custom_fields.edit(custom_field_id, ValuesClass='Invalid::Class'), rt.exceptions.InvalidUseError),
+        ('invalid values source', lambda: tracker.custom_fields.edit(select_field_id, ValuesClass='Invalid::Class'), rt.exceptions.InvalidUseError),
+        ('canonicalizer of a select field', lambda: tracker.custom_fields.edit(select_field_id, CanonicalizeClass='Invalid'), rt.exceptions.InvalidUseError),
+        ('empty name of a user', lambda: tracker.users.edit(user_name, Name=''), rt.exceptions.InvalidUseError),
+        ('link of an article to a number', lambda: tracker.articles.edit(article_id, RefersTo=999999999), rt.exceptions.InvalidUseError),
         ('invalid status of a reply', lambda: tracker.tickets.reply(ticket_id, 'Reply', status='invalid'), rt.exceptions.InvalidUseError),
         ('invalid status of a comment', lambda: tracker.tickets.comment(ticket_id, 'Comment', status='invalid'), rt.exceptions.InvalidUseError),
     ]
@@ -116,6 +129,8 @@ def test_accepted_changes_are_complete(rt_connection: Rt):
     tracker = rt_connection
     ticket_id = tracker.tickets.create(RT_QUEUE, subject=f'Complete {random_string()}', content='Test')
     other_id = tracker.tickets.create(RT_QUEUE, subject=f'Complete {random_string()}', content='Test')
+    catalog_id = tracker.catalogs.create(f'catalog-{random_string()}')
+    asset_id = tracker.assets.create(f'asset-{random_string()}', catalog_id)
     # values which look like a refusal
     subject = "Can't set 'Permission Denied' - invalid status"
 
@@ -125,6 +140,16 @@ def test_accepted_changes_are_complete(rt_connection: Rt):
         tracker.tickets.edit(ticket_id, Priority=5, Subject=f'{subject} {random_string()}'),
         tracker.tickets.reply(ticket_id, 'Reply', subject=subject),
         tracker.tickets.comment(ticket_id, "Comment: doesn't exist, failed, invalid"),
+        # descriptions of the transactions of the changes
+        tracker.tickets.edit(ticket_id, Description='first'),
+        tracker.tickets.edit(ticket_id, Description='second'),
+        tracker.tickets.edit(ticket_id, Description=''),
+        tracker.tickets.edit(ticket_id, TimeWorked=30),
+        tracker.tickets.edit(ticket_id, TimeWorked=15),
+        tracker.catalogs.edit(catalog_id, Disabled=1),
+        tracker.catalogs.edit(catalog_id, Disabled=0),
+        tracker.assets.edit(asset_id, HeldBy='root'),
+        tracker.assets.edit(asset_id, HeldBy='Nobody'),
     ):
         assert result
         assert result.complete, result.messages

@@ -182,8 +182,10 @@ names it does not know to RT as they are, and logs a warning on the logger of th
 
 The fields of users and queues are a closed set, so ``users.create()``, ``users.edit()``, ``queues.create()`` and
 ``queues.edit()`` raise :py:exc:`~rt.exceptions.InvalidUseError` for unknown fields instead. Custom fields are passed in
-``CustomFields`` (and searched with ``CF.{name}``), so they are never reported. The names in ``fields`` are not checked,
-as RT also returns computed fields which are no fields of the objects (e.g. ``ContentLength`` of attachments).
+``CustomFields``, so their names are not checked in ``create()`` and ``edit()``. In search conditions (``CF.{name}``),
+each custom field is looked up once (one request), and a warning is logged if RT does not find it, as RT then ignores the
+condition as well. The names in ``fields`` are not checked, as RT also returns computed fields which are no fields of the
+objects (e.g. ``ContentLength`` of attachments).
 
 
 Tickets

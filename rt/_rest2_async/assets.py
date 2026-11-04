@@ -143,7 +143,7 @@ class AsyncAssets:
         :returns: Iterator of transactions, each a dictionary with the same keys as for
                   :py:meth:`~AsyncTickets.history`. Empty if the asset does not exist.
         """
-        self._t.warn_unknown_conditions(search_params, 'transactions', 'assets.history')
+        await self._t.check_conditions(search_params, 'transactions', 'assets.history')
         async for transaction in self._t.paged_request(
             _path('asset', asset_id, 'history'),
             json_data=list(search_params) if search_params else None,
@@ -205,7 +205,7 @@ class AsyncAssets:
         :returns: Iterator of the found assets.
         :raises InvalidUseError: If *raw_query* is empty or combined with *catalog_id* or *search_params*.
         """
-        self._t.warn_unknown_conditions(search_params, 'assets', 'assets.search')
+        await self._t.check_conditions(search_params, 'assets', 'assets.search')
         get_params = {**_fields_params(fields, default_fields='Owner,Description,Status'), **_order_params(order)}
 
         if raw_query is not None:
@@ -417,7 +417,7 @@ class AsyncCatalogs:
         :returns: Iterator of the found catalogs.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'catalogs', 'catalogs.search')
+        await self._t.check_conditions(search_params, 'catalogs', 'catalogs.search')
         search_params = list(search_params or [])
         if not search_params:
             # RT returns no catalog for a search without a condition

@@ -12,6 +12,8 @@ from urllib.parse import urljoin
 import httpx2
 
 from rt.common import (
+    _CUSTOM_FIELD_CONDITION,
+    _CUSTOM_FIELD_LOOKUP_TYPES,
     _REDACTED_HEADERS,
     _SEARCHABLE_FIELDS,
     VALID_TICKET_LINK_NAMES,
@@ -347,19 +349,20 @@ class _AsyncTransport:
                 ', '.join(unknown),
             )
 
-    def warn_unknown_conditions(self, search_params: JSONSearchParams | None, collection: str, method: str) -> None:
-        """Log a warning for fields of search conditions which are not known to the library.
+    async def check_conditions(self, search_params: JSONSearchParams | None, collection: str, method: str) -> None:
+        """Log warnings for conditions of a search which RT would ignore without any message.
 
-        RT ignores conditions on fields it can not search, so the search may return more objects than intended (for
-        users and groups even all of them). The conditions are sent to RT as they are: newer versions of RT may
-        support more fields.
+        RT ignores conditions on fields it can not search and on custom fields it can not load, so the search may
+        return more objects than intended (for users and groups even all of them). The conditions are sent to RT as
+        they are: newer versions of RT may support more fields. Each custom field of the conditions is looked up
+        once, as RT does it (by name or ID, of the lookup type of the searched objects, also disabled ones).
 
         :param search_params: The conditions of the search.
         :param collection: The endpoint of the search, e.g. ``users``, which selects the known fields.
         :param method: Name of the method, for the message, e.g. ``users.search``.
         """
-        names = [condition['field'] for condition in search_params or [] if isinstance(condition.get('field'), str)]
-        unknown = _unknown_fields(typing.cast('list[str]', names), _SEARCHABLE_FIELDS[collection], conditions=True)
+        names = [field for condition in search_params or [] if isinstance(field := condition.get('field'), str)]
+        unknown = _unknown_fields(names, _SEARCHABLE_FIELDS[collection], conditions=True)
         if unknown:
             self.logger.warning(
                 '%s: condition(s) on field(s) not known to the library, sent to RT as they are (RT ignores conditions on fields '
@@ -367,6 +370,30 @@ class _AsyncTransport:
                 method,
                 ', '.join(unknown),
             )
+
+        custom_fields = dict.fromkeys(match['name'] for name in names if (match := _CUSTOM_FIELD_CONDITION.fullmatch(name)))
+        missing = [name for name in custom_fields if not await self._custom_field_exists(name, _CUSTOM_FIELD_LOOKUP_TYPES[collection])]
+        if missing:
+            self.logger.warning(
+                '%s: custom field(s) of the conditions not found (RT ignores conditions on custom fields it can not load, so more objects may be found): %s',
+                method,
+                ', '.join(missing),
+            )
+
+    async def _custom_field_exists(self, name: str, lookup_type: str) -> bool:
+        """Return whether RT finds a custom field for a condition, like RT::CustomField::LoadByName for JSON searches.
+
+        :param name: Name (case-insensitive) or ID of the custom field.
+        :param lookup_type: Lookup type of the custom fields of the searched objects, e.g. ``RT::User``.
+        """
+        conditions: list[dict[str, JSONInput]] = [
+            {'field': 'Name' if not name.isdigit() else 'id', 'value': name},
+            {'field': 'LookupType', 'value': lookup_type},
+        ]
+        params: dict[str, str | int] = {'fields': 'Name', 'find_disabled_rows': 1, 'per_page': 1}
+        result = self.dict_result(await self.send('POST', 'customfields', params=params, json_data=conditions))
+        items = result.get('items')
+        return isinstance(items, list) and len(items) > 0
 
     def result(self, messages: list[str]) -> ActionResult:
         """Log the status messages of RT for a change which RT may have applied only partly and return the result."""
@@ -529,7 +556,7 @@ class _AsyncTransport:
         :param method: Name of the calling method, for the warning about unknown fields, e.g. ``queues.search``.
         :returns: Iterator of the found objects.
         """
-        self.warn_unknown_conditions(search_params, selector, method)
+        await self.check_conditions(search_params, selector, method)
         conditions = list(search_params or [])
         if not conditions:
             conditions = [{'field': 'id', 'operator': '>', 'value': 0}]

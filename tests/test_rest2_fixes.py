@@ -414,11 +414,25 @@ _LISTING_METHODS = [
 ]
 
 
-def _listing_handler(requests: list[httpx2.Request]) -> typing.Callable[[httpx2.Request], httpx2.Response]:
+def _custom_field_lookup(request: httpx2.Request) -> list | None:
+    """Return the conditions if the request is the lookup of a custom field of conditions, else None."""
+    if request.url.path != '/REST/2.0/customfields' or request.url.params.get('per_page') != '1':
+        return None
+    conditions = json.loads(request.content)
+    return conditions if any(condition['field'] == 'LookupType' for condition in conditions) else None
+
+
+def _listing_handler(requests: list[httpx2.Request], custom_fields: frozenset[str] = frozenset()) -> typing.Callable[[httpx2.Request], httpx2.Response]:
+    """Handler answering listings with an empty page; custom fields of conditions exist if their name is in *custom_fields*."""
+
     def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == '/REST/2.0/ticket/1':
             # the check of the ticket before its attachments are searched
             return httpx2.Response(200, json={'id': 1})
+        lookup = _custom_field_lookup(request)
+        if lookup is not None:
+            name = lookup[0]['value']
+            return _page(1, [{'id': 7, 'Name': name}] if name in custom_fields else [], pages=1 if name in custom_fields else 0)
         requests.append(request)
         return _page(1, [], pages=0)
 
@@ -550,7 +564,7 @@ def test_unknown_fields_are_sent_with_warning(area: str, method: str, args: tupl
 )
 def test_unknown_condition_fields_are_sent_with_warning(area: str, method: str, args: tuple, caplog: pytest.LogCaptureFixture):
     requests: list[httpx2.Request] = []
-    client = _mock_client(_listing_handler(requests))
+    client = _mock_client(_listing_handler(requests, custom_fields=frozenset({'Severity'})))
     conditions = [{'field': 'id', 'operator': '>', 'value': 0}, {'field': 'Nmae', 'value': 'x'}, {'field': 'CF.{Severity}', 'value': 'High'}]
 
     with caplog.at_level(logging.WARNING, logger=Rt.__module__):
@@ -562,6 +576,61 @@ def test_unknown_condition_fields_are_sent_with_warning(area: str, method: str, 
     (record,) = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert f'{area}.{method}' in record.getMessage()
     assert record.getMessage().endswith(': Nmae')
+
+
+def test_unknown_custom_field_of_conditions_is_sent_with_warning(caplog: pytest.LogCaptureFixture):
+    lookups: list[httpx2.Request] = []
+    requests: list[httpx2.Request] = []
+    handler = _listing_handler(requests, custom_fields=frozenset({'Severity', '12'}))
+
+    def recording_handler(request: httpx2.Request) -> httpx2.Response:
+        if _custom_field_lookup(request) is not None:
+            lookups.append(request)
+        return handler(request)
+
+    client = _mock_client(recording_handler)
+    conditions = [
+        {'field': 'CF.{Severity}', 'value': 'High'},
+        {'field': 'CustomField.{Severity}', 'value': 'Low'},
+        {'field': 'CF.{Sevrity}', 'value': 'High'},
+        {'field': 'CF.{12}', 'value': 'x'},
+    ]
+
+    with caplog.at_level(logging.WARNING, logger=Rt.__module__):
+        _collect(client.users.search(search_params=conditions))
+
+    # RT ignores conditions on custom fields it can not load: sent as they are, with a warning for the missing one
+    (request,) = requests
+    assert json.loads(request.content) == conditions
+    (record,) = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert 'users.search' in record.getMessage()
+    assert record.getMessage().endswith(': Sevrity')
+    # each custom field is looked up once, like RT does it: by name or ID, of the lookup type of the searched objects
+    assert [json.loads(lookup.content) for lookup in lookups] == [
+        [{'field': 'Name', 'value': 'Severity'}, {'field': 'LookupType', 'value': 'RT::User'}],
+        [{'field': 'Name', 'value': 'Sevrity'}, {'field': 'LookupType', 'value': 'RT::User'}],
+        [{'field': 'id', 'value': '12'}, {'field': 'LookupType', 'value': 'RT::User'}],
+    ]
+    assert {lookup.url.params['find_disabled_rows'] for lookup in lookups} == {'1'}
+
+
+def test_custom_field_of_conditions_live(rt_connection: Rt, caplog: pytest.LogCaptureFixture):
+    """RT and the library agree: a condition on an existing user custom field filters, one on a missing custom field is reported."""
+    field_name = f'cf-{random_string()}'
+    field_id = rt_connection.custom_fields.create(field_name, 'Freeform', 'RT::User')
+    rt_connection.custom_fields.apply(field_id, 0)
+    user_name = f'user-{random_string()}'
+    rt_connection.users.create(user_name, f'{user_name}@example.com', CustomFields={field_name: 'marker'})
+
+    with caplog.at_level(logging.WARNING, logger=Rt.__module__):
+        found = [item['id'] for item in rt_connection.users.search(search_params=[{'field': f'CF.{{{field_name}}}', 'value': 'marker'}])]
+    assert found == [user_name]
+    assert not [record for record in caplog.records if record.levelno == logging.WARNING]
+
+    with caplog.at_level(logging.WARNING, logger=Rt.__module__):
+        searched = rt_connection.users.search(search_params=[{'field': f'CF.{{{field_name}-typo}}', 'value': 'marker'}])
+        assert searched.__next__()  # RT ignores the condition and returns users
+    assert f'{field_name}-typo' in caplog.text
 
 
 def test_listing_order_fields_and_conditions(rt_connection: Rt):

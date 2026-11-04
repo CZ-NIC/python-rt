@@ -359,7 +359,7 @@ class AsyncTickets:
                   :py:meth:`messages` for the text of messages. Empty if the ticket does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'transactions', 'tickets.history')
+        await self._t.check_conditions(search_params, 'transactions', 'tickets.history')
         async for transaction in self._t.paged_request(
             _path('ticket', ticket_id, 'history'),
             json_data=list(search_params) if search_params else None,
@@ -425,7 +425,7 @@ class AsyncTickets:
         :raises BadRequestError: If the TransactionSQL query is invalid.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'transactions', 'tickets.search_transactions')
+        await self._t.check_conditions(search_params, 'transactions', 'tickets.search_transactions')
         if (search_params is None) == (raw_query is None):
             raise InvalidUseError('Specify either search_params or raw_query.')
 
@@ -650,7 +650,7 @@ class AsyncTickets:
         :raises NotAllowedError: If the user is not allowed to see the ticket.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'attachments', 'tickets.get_attachments')
+        await self._t.check_conditions(search_params, 'attachments', 'tickets.get_attachments')
         get_params = {**_fields_params(fields, default_fields='Filename,ContentType,ContentLength'), **_order_params(order)}
 
         await self._check_ticket(ticket_id)
@@ -685,7 +685,7 @@ class AsyncTickets:
         :raises NotAllowedError: If the user is not allowed to see the ticket.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'attachments', 'tickets.get_attachments_ids')
+        await self._t.check_conditions(search_params, 'attachments', 'tickets.get_attachments_ids')
         await self._check_ticket(ticket_id)
         async for item in self._t.paged_request(
             _path('ticket', ticket_id, 'attachments'),
@@ -752,7 +752,7 @@ class AsyncTickets:
         :returns: Iterator of the found attachments.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'attachments', 'tickets.search_attachments')
+        await self._t.check_conditions(search_params, 'attachments', 'tickets.search_attachments')
         params = {**_fields_params(fields, default_fields='Filename,ContentType,ContentLength,TransactionId,Created'), **_order_params(order)}
 
         async for item in self._t.paged_request('attachments', json_data=self._attachment_conditions(search_params, files_only=files_only), params=params):

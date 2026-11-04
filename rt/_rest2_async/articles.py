@@ -125,7 +125,7 @@ class AsyncArticles:
                   :py:meth:`~AsyncTickets.history`. Empty if the article does not exist.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'transactions', 'articles.history')
+        await self._t.check_conditions(search_params, 'transactions', 'articles.history')
         async for transaction in self._t.paged_request(
             _path('article', article_id, 'history'),
             json_data=list(search_params) if search_params else None,

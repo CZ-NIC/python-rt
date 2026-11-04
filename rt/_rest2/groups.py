@@ -209,7 +209,7 @@ class Groups:
         :returns: Iterator of the found groups.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'groups', 'groups.search')
+        self._t.check_conditions(search_params, 'groups', 'groups.search')
         params: dict[str, str | int | list[str]] = {
             **_order_params(order),
             **_fields_params(fields, default_fields='Name,Description,Disabled'),

@@ -310,6 +310,11 @@ Python 3.11 or newer is required.
   the user may not change the linked object.
 - REST2 `tickets.new_correspondence()` returned all tickets instead of only those last updated by other users than the one of
   the connection, as documented (and as implemented in REST1).
+- REST2 recognizes more status messages of RT (found by a review of the messages of RT 6.0.4 which changes made with REST2
+  can return), e.g. invalid patterns, render types and values sources of custom fields, an empty user name, the password
+  policy, refused status changes and links of articles as refusals, and the time worked, a changed description of a
+  ticket and the disabling of catalogs as successes. Before, they were listed in `ActionResult.unrecognized`; messages
+  with `%quant(...)` were never recognized.
 ### Added
 - Add an `http_timeout` parameter to the REST1 `Rt` class.
 - The REST1 `Rt` can be closed with `close()` and used as context manager (`with rt.rest1.Rt(...) as tracker:`), like the REST2 clients.
@@ -385,7 +390,9 @@ Python 3.11 or newer is required.
   catalogs, groups, articles, classes, custom fields and their values) and in the conditions of searches
   (`search_params`), as RT ignores unknown fields without any message (a search for users or groups with a condition on
   an unknown field returns all of them). The fields are still sent to RT, which may support more fields than the
-  library knows. Users and queues still raise `InvalidUseError` for unknown fields.
+  library knows. Users and queues still raise `InvalidUseError` for unknown fields. Conditions on custom fields
+  (`CF.{name}`) are checked as well: each custom field is looked up once (one request), as RT ignores conditions on custom
+  fields it can not load.
 - Add `rt.exceptions.ConflictError`, which REST2 raises for HTTP status 409 (e.g. when granting a right which is
   already granted) with the message of RT. It is a subclass of `UnexpectedResponseError`, which was raised before,
   so existing code catching it keeps working.

@@ -81,6 +81,11 @@ async def test_refusals_of_partial_changes(async_rt_connection: AsyncRt):
     ticket_id = await tracker.tickets.create(RT_QUEUE, subject=f'Partial {random_string()}', content='Test')
     queue_id = await tracker.queues.create(f'queue-{random_string()}')
     custom_field_id = await tracker.custom_fields.create(f'cf-{random_string()}', 'Freeform', 'RT::Queue-RT::Ticket')
+    select_field_id = await tracker.custom_fields.create(f'cf-{random_string()}', 'Select', 'RT::Queue-RT::Ticket')
+    user_name = f'user-{random_string()}'
+    await tracker.users.create(user_name, f'{user_name}@example.com')
+    class_id = await tracker.classes.create(f'class-{random_string()}')
+    article_id = await tracker.articles.create(f'article-{random_string()}', class_id)
 
     cases: list[Case] = [
         ('invalid status', lambda: tracker.tickets.edit(ticket_id, Status='invalid'), rt.exceptions.InvalidUseError),
@@ -88,6 +93,14 @@ async def test_refusals_of_partial_changes(async_rt_connection: AsyncRt):
         ('missing queue', lambda: tracker.tickets.edit(ticket_id, Queue=f'Support Desk {random_string()}'), rt.exceptions.NotFoundError),
         ('invalid lifecycle', lambda: tracker.queues.edit(queue_id, Lifecycle='invalid'), rt.exceptions.InvalidUseError),
         ('invalid type of a custom field', lambda: tracker.custom_fields.edit(custom_field_id, Type='Invalid'), rt.exceptions.InvalidUseError),
+        ('invalid pattern of a custom field', lambda: tracker.custom_fields.edit(custom_field_id, Pattern='(['), rt.exceptions.InvalidUseError),
+        ('render type of a freeform field', lambda: tracker.custom_fields.edit(custom_field_id, RenderType='Dropdown'), rt.exceptions.InvalidUseError),
+        ('invalid render type', lambda: tracker.custom_fields.edit(select_field_id, RenderType='Invalid'), rt.exceptions.InvalidUseError),
+        ('values of a freeform field', lambda: tracker.custom_fields.edit(custom_field_id, ValuesClass='Invalid::Class'), rt.exceptions.InvalidUseError),
+        ('invalid values source', lambda: tracker.custom_fields.edit(select_field_id, ValuesClass='Invalid::Class'), rt.exceptions.InvalidUseError),
+        ('canonicalizer of a select field', lambda: tracker.custom_fields.edit(select_field_id, CanonicalizeClass='Invalid'), rt.exceptions.InvalidUseError),
+        ('empty name of a user', lambda: tracker.users.edit(user_name, Name=''), rt.exceptions.InvalidUseError),
+        ('link of an article to a number', lambda: tracker.articles.edit(article_id, RefersTo=999999999), rt.exceptions.InvalidUseError),
         ('invalid status of a reply', lambda: tracker.tickets.reply(ticket_id, 'Reply', status='invalid'), rt.exceptions.InvalidUseError),
         ('invalid status of a comment', lambda: tracker.tickets.comment(ticket_id, 'Comment', status='invalid'), rt.exceptions.InvalidUseError),
     ]
@@ -114,6 +127,8 @@ async def test_accepted_changes_are_complete(async_rt_connection: AsyncRt):
     tracker = async_rt_connection
     ticket_id = await tracker.tickets.create(RT_QUEUE, subject=f'Complete {random_string()}', content='Test')
     other_id = await tracker.tickets.create(RT_QUEUE, subject=f'Complete {random_string()}', content='Test')
+    catalog_id = await tracker.catalogs.create(f'catalog-{random_string()}')
+    asset_id = await tracker.assets.create(f'asset-{random_string()}', catalog_id)
     # values which look like a refusal
     subject = "Can't set 'Permission Denied' - invalid status"
 
@@ -123,6 +138,16 @@ async def test_accepted_changes_are_complete(async_rt_connection: AsyncRt):
         await tracker.tickets.edit(ticket_id, Priority=5, Subject=f'{subject} {random_string()}'),
         await tracker.tickets.reply(ticket_id, 'Reply', subject=subject),
         await tracker.tickets.comment(ticket_id, "Comment: doesn't exist, failed, invalid"),
+        # descriptions of the transactions of the changes
+        await tracker.tickets.edit(ticket_id, Description='first'),
+        await tracker.tickets.edit(ticket_id, Description='second'),
+        await tracker.tickets.edit(ticket_id, Description=''),
+        await tracker.tickets.edit(ticket_id, TimeWorked=30),
+        await tracker.tickets.edit(ticket_id, TimeWorked=15),
+        await tracker.catalogs.edit(catalog_id, Disabled=1),
+        await tracker.catalogs.edit(catalog_id, Disabled=0),
+        await tracker.assets.edit(asset_id, HeldBy='root'),
+        await tracker.assets.edit(asset_id, HeldBy='Nobody'),
     ):
         assert result
         assert result.complete, result.messages

@@ -193,7 +193,7 @@ class CustomFields:
                   field does not exist (RT does not report it).
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'customfieldvalues', 'custom_fields.get_values')
+        self._t.check_conditions(search_params, 'customfieldvalues', 'custom_fields.get_values')
         for item in self._t.paged_request(_path('customfield', custom_field_id, 'values'), json_data=list(search_params or []), params=_order_params(order)):
             yield item
 
@@ -317,7 +317,7 @@ class CustomFields:
         :raises NotAllowedError: If the user is not allowed to see the queue, catalog or class.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'customfields', 'custom_fields.search')
+        self._t.check_conditions(search_params, 'customfields', 'custom_fields.search')
         if (object_type is None) != (object_id is None):
             raise InvalidUseError('object_type and object_id must be specified together.')
 

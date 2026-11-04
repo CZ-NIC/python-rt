@@ -254,7 +254,7 @@ class Users:
         :returns: Iterator of the found users.
         :raises UnexpectedResponseError: If the response from RT is not as expected.
         """
-        self._t.warn_unknown_conditions(search_params, 'users', 'users.search')
+        self._t.check_conditions(search_params, 'users', 'users.search')
         if privileged is None:
             selector = 'users'
         else:

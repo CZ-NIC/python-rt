@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.8.1], 2026-11-04
+### Fixes
+- Fix the REST2 search() with custom fields (CF_<name>=...), which created a malformed query with an unmatched single quote (#128 thanks @Goggin).
+
 ## [v3.8.0], 2026-07-20
 ### Changes
 - Switch from the seemingly unmaintained httpx library to the actively maintained fork, httpx2.

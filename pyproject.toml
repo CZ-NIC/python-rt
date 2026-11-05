@@ -1,28 +1,33 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "rt"
 description = "Python interface to Request Tracker API"
 readme = "README.rst"
-license = { text = "GNU General Public License v3 (GPLv3)" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [{ name = "Georges Toth", email = "georges.toth@govcert.etat.lu" }]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
-  "Environment :: Console",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
-  "Operating System :: POSIX",
+  "Operating System :: OS Independent",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
+  "Framework :: AsyncIO",
   "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
 ]
-requires-python = ">= 3.10"
+requires-python = ">= 3.11"
 dependencies = [
   "httpx2~=2.7",
-  "requests~=2.32",
 ]
 dynamic = ["version"]
 
@@ -44,15 +49,18 @@ docs = [
 dev = [
   "mypy",
   "ruff",
-  "types-requests",
   "codespell",
   "bandit",
   "prek>=0.3.2",
+  "unasyncd~=0.10",
+  "pytest-cov>=7.1.0",
 ]
 test = [
   "pytest~=9.1",
   "pytest-asyncio~=1.4",
-  "coverage~=7.6",
+  "pytest-xdist~=3.8",
+  "coverage~=7.10",
+  "typeguard>=4.6.0",
 ]
 
 [tool.hatch.envs.default]
@@ -68,23 +76,68 @@ exclude = []
 [tool.hatch.version]
 source = "vcs"
 
+[tool.unasyncd]
+# rt/rest2.py and the sync REST2 tests are generated from the async ones, do not edit them manually.
+# Run `uv run unasyncd` to regenerate them; it exits with 1 if a generated file was out of date.
+files = { "rt/rest2_async.py" = "rt/rest2.py", "rt/_rest2_async/__init__.py" = "rt/_rest2/__init__.py", "rt/_rest2_async/transport.py" = "rt/_rest2/transport.py", "rt/_rest2_async/client.py" = "rt/_rest2/client.py", "rt/_rest2_async/tickets.py" = "rt/_rest2/tickets.py", "rt/_rest2_async/users.py" = "rt/_rest2/users.py", "rt/_rest2_async/groups.py" = "rt/_rest2/groups.py", "rt/_rest2_async/queues.py" = "rt/_rest2/queues.py", "rt/_rest2_async/assets.py" = "rt/_rest2/assets.py", "rt/_rest2_async/articles.py" = "rt/_rest2/articles.py", "rt/_rest2_async/custom_fields.py" = "rt/_rest2/custom_fields.py", "rt/_rest2_async/rights.py" = "rt/_rest2/rights.py", "tests/test_basic_async.py" = "tests/test_basic.py", "tests/test_tickets_async.py" = "tests/test_tickets.py", "tests/test_rest2_fixes_async.py" = "tests/test_rest2_fixes.py", "tests/test_rest2_admin_async.py" = "tests/test_rest2_admin.py", "tests/test_rest2_messages_async.py" = "tests/test_rest2_messages.py" }
+add_replacements = { "AsyncRt" = "Rt", "rt._rest2_async.client.AsyncRt" = "rt._rest2.client.Rt", "rt._rest2_async.transport._AsyncTransport" = "rt._rest2.transport._Transport", "rt._rest2_async.tickets.AsyncTickets" = "rt._rest2.tickets.Tickets", "rt._rest2_async.users.AsyncUsers" = "rt._rest2.users.Users", "rt._rest2_async.groups.AsyncGroups" = "rt._rest2.groups.Groups", "rt._rest2_async.queues.AsyncQueues" = "rt._rest2.queues.Queues", "rt._rest2_async.assets.AsyncAssets" = "rt._rest2.assets.Assets", "rt._rest2_async.assets.AsyncCatalogs" = "rt._rest2.assets.Catalogs", "rt._rest2_async.articles.AsyncArticles" = "rt._rest2.articles.Articles", "rt._rest2_async.articles.AsyncClasses" = "rt._rest2.articles.Classes", "rt._rest2_async.custom_fields.AsyncCustomFields" = "rt._rest2.custom_fields.CustomFields", "rt._rest2_async.custom_fields.AsyncCustomRoles" = "rt._rest2.custom_fields.CustomRoles", "rt._rest2_async.rights.AsyncRights" = "rt._rest2.rights.Rights", "_AsyncTransport" = "_Transport", "AsyncTickets" = "Tickets", "AsyncUsers" = "Users", "AsyncGroups" = "Groups", "AsyncQueues" = "Queues", "AsyncAssets" = "Assets", "AsyncCatalogs" = "Catalogs", "AsyncArticles" = "Articles", "AsyncClasses" = "Classes", "AsyncCustomFields" = "CustomFields", "AsyncCustomRoles" = "CustomRoles", "AsyncRights" = "Rights", "httpx2.AsyncClient" = "httpx2.Client", "aclose" = "close" }
+add_editors_note = true
+transform_docstrings = true
+# removes the imports of the async modules which are left in the generated tests
+ruff_fix = true
+ruff_format = true
+# Always regenerate: without it, unasyncd only detects changes of the source file, not manual edits of rt/rest2.py.
+force_regen = true
+cache = false
+
+[tool.unasyncd.per_file_add_replacements."tests/test_basic_async.py"]
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
+[tool.unasyncd.per_file_add_replacements."tests/test_tickets_async.py"]
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
+[tool.unasyncd.per_file_add_replacements."tests/test_rest2_fixes_async.py"]
+"rt.rest2_async" = "rt.rest2"
+"rest2_async" = "rest2"
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
+[tool.unasyncd.per_file_add_replacements."tests/test_rest2_admin_async.py"]
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
+[tool.unasyncd.per_file_add_replacements."tests/test_rest2_messages_async.py"]
+"rt.rest2_async.AsyncRt" = "rt.rest2.Rt"
+"async_rt_connection" = "rt_connection"
+
 [tool.mypy]
+strict = true
 show_error_codes = true
 show_error_context = true
 show_column_numbers = true
 ignore_missing_imports = true
-disallow_incomplete_defs = true
-disallow_untyped_defs = true
-disallow_untyped_calls = false
 warn_no_return = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-strict_optional = true
-check_untyped_defs = false
 
 files = [
-  "rt/**/*.py"
+  "rt/**/*.py",
+  "tests/**/*.py",
 ]
+
+[[tool.mypy.overrides]]
+# tests are checked, but need no complete type annotations
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+# the REST1 tests are an old unittest suite without type annotations
+module = "tests.test_rest1"
+ignore_errors = true
 
 [tool.pytest.ini_options]
 minversion = "8.0"
@@ -93,11 +146,27 @@ asyncio_default_fixture_loop_scope = "session"
 testpaths = [
   "tests"
 ]
+# The sync tests are generated from the async tests (see [tool.unasyncd]) and only run with `pytest -m sync` or
+# `pytest -m ""` (all tests). The tests run in 4 parallel processes (pytest-xdist), use `-n 0` to debug them.
+# Tests marked with the same xdist_group run in the same process, i.e. never at the same time.
+addopts = "-m 'not sync' -n 4 --dist loadgroup"
+markers = [
+  "sync: tests of the sync REST2 client, generated from the async tests (not run by default)",
+  "live: tests which need a running RT (all others, e.g. with mocked responses, run in seconds: pytest -m 'not live')",
+]
+
+[tool.coverage.run]
+# The tests run in parallel processes (pytest-xdist): measure them too, with one data file per process, which
+# `coverage combine` merges. The main pytest process runs no code of the library.
+patch = ["subprocess"]
+parallel = true
+source = ["rt"]
+disable_warnings = ["no-data-collected"]
 
 [tool.ruff]
-line-length = 140
+line-length = 160
 indent-width = 4
-target-version = "py310"
+target-version = "py311"
 include = [
   "pyproject.toml",
   "rt/**/*.py",
@@ -190,6 +259,15 @@ ignore = [
 "rt/rest1.py" = [
   "N803", # Argument name should be lowercase
 ]
+# generated from the files in rt/_rest2_async/, where `yield from` is not available
+"rt/_rest2/*.py" = [
+  "UP028", # yield-in-for-loop
+]
+# generated from the corresponding *_async.py files, where `[item async for item in ...]` can not be replaced by list()
+"tests/test_basic.py" = ["C416"]
+"tests/test_tickets.py" = ["C416"]
+"tests/test_rest2_fixes.py" = ["C416"]
+"tests/test_rest2_admin.py" = ["C416"]
 
 [tool.ruff.format]
 quote-style = "single"

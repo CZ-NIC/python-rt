@@ -16,15 +16,14 @@ jobs:
 
     services:
       rt:
-        image: netsandbox/request-tracker:6.0
+        # https://github.com/python-rt/docker-rt; the steps start when RT is ready (health check of the image)
+        image: ghcr.io/python-rt/request-tracker:6.0
         ports:
           - 8080:8080
-        env:
-          RT_WEB_PORT: 8080
 
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
 
     steps:
       - uses: actions/checkout@v7
@@ -38,9 +37,19 @@ jobs:
           python3 -m pip install uv
           uv sync --group test
 
-      - name: Test with pytest
+      - name: Prepare RT
+        # REST2 can not create authentication tokens or apply custom fields to queues, see tests/rt_initdata.pl
         run: |
-          uv run pytest -v tests
+          docker exec -i "${{ job.services.rt.id }}" rt-initdata - < tests/rt_initdata.pl
+          token=$(docker exec "${{ job.services.rt.id }}" rt-token --description 'python-rt tests')
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "RT_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Test with pytest
+        # 2 parallel processes (pytest-xdist): the runner has 4 CPUs, which it shares with the RT container
+        run: |
+          uv run pytest -v -n 2 -m '' tests
 
 
   coverage:
@@ -49,11 +58,10 @@ jobs:
 
     services:
       rt:
-        image: netsandbox/request-tracker:6.0
+        # https://github.com/python-rt/docker-rt; the steps start when RT is ready (health check of the image)
+        image: ghcr.io/python-rt/request-tracker:6.0
         ports:
           - 8080:8080
-        env:
-          RT_WEB_PORT: 8080
 
     steps:
       - uses: actions/checkout@v7
@@ -65,11 +73,20 @@ jobs:
         run: |
           python3 -m pip install uv
           uv sync --group test
-          uv pip install coverage[toml]
+
+      - name: Prepare RT
+        # REST2 can not create authentication tokens or apply custom fields to queues, see tests/rt_initdata.pl
+        run: |
+          docker exec -i "${{ job.services.rt.id }}" rt-initdata - < tests/rt_initdata.pl
+          token=$(docker exec "${{ job.services.rt.id }}" rt-token --description 'python-rt tests')
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "RT_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: Generate coverage data
         run: |
-          uv run coverage run --omit tests --parallel-mode -m pytest tests
+          # the processes of pytest-xdist are measured too, see [tool.coverage.run] in pyproject.toml
+          uv run coverage run -m pytest -n 2 -m '' tests
 
       - name: Combine coverage & create xml report
         run: |
@@ -96,11 +113,30 @@ jobs:
           python3 -m pip install uv
           uv sync --group dev
 
+      - name: Generated sync code and tests are up to date with the async ones
+        run: uv run unasyncd
+
       - name: mypy
-        run: uv run mypy --config-file pyproject.toml rt
+        # checks the files configured in pyproject.toml: the library and the tests
+        run: uv run mypy --config-file pyproject.toml
 
       - name: bandit
         run: uv run bandit -r rt
 
       - name: codespell
         run: uv run codespell --ignore-words=.codespell_ignore rt
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - run: |
+          python3 -m pip install uv
+          uv sync --group docs
+
+      - name: Build the documentation, warnings (e.g. broken references in docstrings) are errors
+        run: uv run sphinx-build -W --keep-going -b html doc doc/_build/html

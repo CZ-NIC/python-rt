@@ -1,0 +1,230 @@
+"""Rights of the REST2 client."""
+
+import collections.abc
+import typing
+
+from rt._rest2_async.transport import _AsyncTransport
+from rt.common import (
+    VALID_RIGHTS_OBJECT_TYPES,
+    JSONInput,
+    RightsObjectType,
+    _path,
+)
+from rt.exceptions import (
+    InvalidUseError,
+    UnexpectedResponseError,
+)
+
+
+class AsyncRights:
+    """Rights of RT.
+
+    Use it as attribute of :py:class:`AsyncRt`, e.g. ``tracker.rights``.
+    """
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        """Create the area of the API.
+
+        :py:class:`AsyncRt` creates it, do not create it yourself.
+
+        :param transport: Transport of the client, which sends the requests to RT.
+        """
+        self._t = transport
+
+    async def get(
+        self,
+        object_type: RightsObjectType,
+        object_id: str | int | None = None,
+        *,
+        user: str | int | None = None,
+        group: str | int | None = None,
+    ) -> collections.abc.AsyncIterator[dict[str, typing.Any]]:
+        """Get the rights granted on an object or globally.
+
+        Example::
+
+            >>> tracker.rights.get('queue', 'General')
+            >>> tracker.rights.get('global', user='alice')
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param object_type: Type of the object: ``'queue'``, ``'group'``, ``'class'``, ``'catalog'``,
+                            ``'customfield'``, or ``'global'`` for the rights granted on the whole system.
+        :param object_id: Name or ID of the queue, class or catalog, or ID of the group or custom field.
+                          Not specified for global rights.
+        :param user: Only return the rights granted to this user, identified by name (str) or ID (int). No rights
+                     are returned for a user which does not exist.
+        :param group: Only return the rights granted to this group, identified by ID (RT does not support names here,
+                      a name matches no rights).
+        :returns: Iterator of the granted rights, each a dictionary with the key Right and either User or Group,
+                  e.g. ``{'Right': 'CreateTicket', 'Group': {'id': 7, 'Name': 'Staff', '_url': '...'}}``.
+        :raises InvalidUseError: If the object type is not supported, the object ID is missing or specified for
+                                 global rights, or both user and group are specified.
+        :raises NotFoundError: If the object does not exist.
+        :raises NotAllowedError: If the user is not allowed to see the rights.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        selector = _path(*self._rights_object(object_type, object_id), 'rights')
+
+        if user is not None and group is not None:
+            raise InvalidUseError('Specify either user or group, but not both.')
+
+        params: dict[str, str | int] = {}
+        if user is not None:
+            params['user'] = user
+        if group is not None:
+            params['group'] = group
+
+        async for item in self._t.paged_request(selector, params=params):
+            # RT ignores the filter for a user which does not exist and returns all rights, so check the user as well
+            if user is not None and not self._is_rights_user(item, user):
+                continue
+            yield item
+
+    async def get_available(self, object_type: RightsObjectType, object_id: str | int | None = None) -> dict[str, dict[str, str]]:
+        """Get the rights which can be granted on an object or globally, grouped by category.
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param object_type: Type of the object, see :py:meth:`get`.
+        :param object_id: Identification of the object, see :py:meth:`get`. Not specified for global rights.
+        :returns: Dictionary of the categories (e.g. General, Staff, Admin, Status), each a dictionary of the rights
+                  and their descriptions, e.g. ``{'General': {'CreateTicket': 'Create tickets in this queue', ...}}``.
+        :raises InvalidUseError: If the object type is not supported, or the object ID is missing or specified for
+                                 global rights.
+        :raises NotFoundError: If the object does not exist.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        response = await self._t.send('GET', _path(*self._rights_object(object_type, object_id), 'rights', 'available'))
+        result = self._t.dict_result(response)
+
+        categories: dict[str, dict[str, str]] = {}
+        for category, rights in result.items():
+            if not isinstance(rights, dict) or not all(isinstance(description, str) for description in rights.values()):
+                raise UnexpectedResponseError(str(result), status_code=response.status_code, response_message=response.text)
+            categories[category] = typing.cast('dict[str, str]', rights)
+
+        return categories
+
+    async def grant(
+        self,
+        object_type: RightsObjectType,
+        object_id: str | int | None,
+        right: str,
+        *,
+        user: str | int | None = None,
+        group: str | int | None = None,
+    ) -> dict[str, typing.Any]:
+        """Grant a right on an object or globally to a user or group.
+
+        Example::
+
+            >>> tracker.rights.grant('queue', 'General', 'CreateTicket', group=7)
+            >>> tracker.rights.grant('global', None, 'SuperUser', user='alice')
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param object_type: Type of the object, see :py:meth:`get`.
+        :param object_id: Identification of the object, see :py:meth:`get`. ``None`` for global rights.
+        :param right: Name of the right, e.g. CreateTicket (see :py:meth:`get_available`).
+        :param user: User to grant the right to, identified by name (str) or ID (int).
+        :param group: Group to grant the right to, identified by ID (only IDs are supported, as RT does not
+                      support group names when revoking rights).
+        :returns: The granted right, e.g. ``{'Right': 'CreateTicket', 'Group': {'id': 7, 'Name': 'Staff', ...}}``.
+        :raises InvalidUseError: If the object type is not supported, the object ID is missing or specified for
+                                 global rights, or not exactly one of user and group is specified.
+        :raises BadRequestError: If RT rejects the request, e.g. for an unknown right, user or group.
+        :raises ConflictError: If the right is already granted.
+        :raises NotAllowedError: If the user is not allowed to grant rights on the object, also if the object does not
+                                 exist (RT answers "Permission Denied" then).
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        selector = _path(*self._rights_object(object_type, object_id), 'rights')
+        principal_type, principal = self._principal(user, group)
+
+        if principal_type == 'user' and isinstance(principal, str):
+            json_data: dict[str, JSONInput] = {'Right': right, 'User': principal}
+        else:
+            json_data = {'Right': right, principal_type.capitalize(): {'id': principal}}
+
+        return self._t.dict_result(await self._t.send('POST', selector, json_data=json_data))
+
+    async def revoke(
+        self,
+        object_type: RightsObjectType,
+        object_id: str | int | None,
+        right: str,
+        *,
+        user: str | int | None = None,
+        group: str | int | None = None,
+    ) -> None:
+        """Revoke a right on an object or globally from a user or group.
+
+        .. note:: Requires RT 6.0.3 or newer, it is not available in RT 5.0. Older versions of RT answer with HTTP status 404,
+                  i.e. :py:exc:`~rt.exceptions.NotFoundError` is raised.
+
+        :param object_type: Type of the object, see :py:meth:`get`.
+        :param object_id: Identification of the object, see :py:meth:`get`. ``None`` for global rights.
+        :param right: Name of the right, e.g. CreateTicket.
+        :param user: User to revoke the right from, identified by name (str) or ID (int).
+        :param group: Group to revoke the right from, identified by ID (RT does not support group names here).
+        :raises InvalidUseError: If the object type is not supported, the object ID is missing or specified for
+                                 global rights, or not exactly one of user and group is specified.
+        :raises NotFoundError: If the right is not granted to the user or group, or the object, user or group
+                               does not exist (RT returns status code 404 for all of them).
+        :raises NotAllowedError: If the user is not allowed to revoke rights on the object.
+        :raises UnexpectedResponseError: If the response from RT is not as expected.
+        """
+        principal_type, principal = self._principal(user, group)
+
+        await self._t.delete(_path(*self._rights_object(object_type, object_id), 'rights', right, principal_type, principal))
+
+    @staticmethod
+    def _rights_object(object_type: RightsObjectType, object_id: str | int | None) -> tuple[str | int, ...]:
+        """Return the path segments of the object of rights.
+
+        :raises InvalidUseError: If the object type is not supported, or the object ID is missing or specified for
+                                 global rights.
+        """
+        if object_type not in VALID_RIGHTS_OBJECT_TYPES:
+            raise InvalidUseError(f'Unsupported object type. Use one of "{", ".join(VALID_RIGHTS_OBJECT_TYPES)}".')
+
+        if object_type == 'global':
+            if object_id is not None:
+                raise InvalidUseError('object_id must not be specified for global rights.')
+            return ('global',)
+
+        if object_id is None or object_id == '':
+            raise InvalidUseError(f'object_id is required for rights on a {object_type}.')
+
+        return (object_type, object_id)
+
+    @staticmethod
+    def _principal(user: str | int | None, group: str | int | None) -> tuple[typing.Literal['user', 'group'], str | int]:
+        """Return the type and the identification of the user or group given for rights.
+
+        :raises InvalidUseError: If not exactly one of user and group is specified.
+        """
+        if (user is None) == (group is None):
+            raise InvalidUseError('Specify either user or group.')
+
+        if user is not None:
+            return 'user', user
+
+        return 'group', typing.cast('str | int', group)
+
+    @staticmethod
+    def _is_rights_user(item: dict[str, typing.Any], user: str | int) -> bool:
+        """Check whether a granted right returned by RT is granted to the given user (by ID or by name)."""
+        principal = item.get('User')
+        if not isinstance(principal, dict):
+            return False
+
+        if isinstance(user, int) or user.isdigit():
+            return str(principal.get('id')) == str(user)
+
+        # RT loads users by name case insensitively
+        return str(principal.get('Name', '')).casefold() == user.casefold()

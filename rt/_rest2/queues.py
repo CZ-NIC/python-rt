@@ -26,6 +26,12 @@ class Queues:
     """
 
     def __init__(self, transport: _Transport) -> None:
+        """Create the area of the API.
+
+        :py:class:`Rt` creates it, do not create it yourself.
+
+        :param transport: Transport of the client, which sends the requests to RT.
+        """
         self._t = transport
 
     def get(self, queue_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:

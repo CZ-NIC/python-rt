@@ -19,6 +19,7 @@ import httpx2
 import pytest
 
 import rt.exceptions
+from rt import rest2_async
 from rt.common import _HISTORY_FIELDS
 from rt.rest2_async import AsyncRt
 
@@ -527,7 +528,7 @@ async def test_unknown_fields_are_sent_with_warning(area: str, method: str, args
         return httpx2.Response(200, json=[])
 
     client = _mock_client(handler)
-    with caplog.at_level(logging.WARNING, logger=AsyncRt.__module__):
+    with caplog.at_level(logging.WARNING, logger=rest2_async.__name__):
         await getattr(getattr(client, area), method)(*args, **{known: 'known'}, Descripton='typo')
 
     # RT ignores unknown fields, newer versions of RT may know them: sent as they are, with a warning for the typo only
@@ -565,7 +566,7 @@ async def test_unknown_condition_fields_are_sent_with_warning(area: str, method:
     client = _mock_client(_listing_handler(requests, custom_fields=frozenset({'Severity'})))
     conditions = [{'field': 'id', 'operator': '>', 'value': 0}, {'field': 'Nmae', 'value': 'x'}, {'field': 'CF.{Severity}', 'value': 'High'}]
 
-    with caplog.at_level(logging.WARNING, logger=AsyncRt.__module__):
+    with caplog.at_level(logging.WARNING, logger=rest2_async.__name__):
         await _collect(getattr(getattr(client, area), method)(*args, search_params=conditions))
 
     # RT ignores conditions on fields it can not search: sent as they are, with a warning for the unknown field only
@@ -594,7 +595,7 @@ async def test_unknown_custom_field_of_conditions_is_sent_with_warning(caplog: p
         {'field': 'CF.{12}', 'value': 'x'},
     ]
 
-    with caplog.at_level(logging.WARNING, logger=AsyncRt.__module__):
+    with caplog.at_level(logging.WARNING, logger=rest2_async.__name__):
         await _collect(client.users.search(search_params=conditions))
 
     # RT ignores conditions on custom fields it can not load: sent as they are, with a warning for the missing one
@@ -620,12 +621,12 @@ async def test_custom_field_of_conditions_live(async_rt_connection: AsyncRt, cap
     user_name = f'user-{random_string()}'
     await async_rt_connection.users.create(user_name, f'{user_name}@example.com', CustomFields={field_name: 'marker'})
 
-    with caplog.at_level(logging.WARNING, logger=AsyncRt.__module__):
+    with caplog.at_level(logging.WARNING, logger=rest2_async.__name__):
         found = [item['id'] async for item in async_rt_connection.users.search(search_params=[{'field': f'CF.{{{field_name}}}', 'value': 'marker'}])]
     assert found == [user_name]
     assert not [record for record in caplog.records if record.levelno == logging.WARNING]
 
-    with caplog.at_level(logging.WARNING, logger=AsyncRt.__module__):
+    with caplog.at_level(logging.WARNING, logger=rest2_async.__name__):
         searched = async_rt_connection.users.search(search_params=[{'field': f'CF.{{{field_name}-typo}}', 'value': 'marker'}])
         assert await searched.__anext__()  # RT ignores the condition and returns users
     assert f'{field_name}-typo' in caplog.text
@@ -1172,7 +1173,7 @@ async def test_token_and_http_auth_are_exclusive():
 @requires_rt_setup
 async def test_token_authentication(caplog: pytest.LogCaptureFixture):
     async with AsyncRt(url=RT_URL, token=RT_TOKEN) as tracker:
-        with caplog.at_level(logging.DEBUG, logger=AsyncRt.__module__):
+        with caplog.at_level(logging.DEBUG, logger=rest2_async.__name__):
             assert (await tracker.users.get(RT_USER))['Name'] == RT_USER
             assert await _collect(tracker.tickets.search(queue=RT_QUEUE, id=0)) == []
 
@@ -1250,7 +1251,7 @@ async def test_debug_log_does_not_contain_credentials(caplog: pytest.LogCaptureF
     tracker = AsyncRt(url=RT_URL, http_auth=httpx2.BasicAuth(RT_USER, RT_PASSWORD))
     user_password = f'Secret-{random_string()}'
 
-    with caplog.at_level(logging.DEBUG, logger=AsyncRt.__module__):
+    with caplog.at_level(logging.DEBUG, logger=rest2_async.__name__):
         assert (await tracker.users.get(RT_USER))['Name'] == RT_USER
         await tracker.users.create(f'user_{random_string()}', f'{random_string()}@example.com', Password=user_password)
 
@@ -1262,7 +1263,7 @@ async def test_debug_log_does_not_contain_credentials(caplog: pytest.LogCaptureF
 
 
 async def test_no_debug_log_if_disabled(caplog: pytest.LogCaptureFixture):
-    with caplog.at_level(logging.INFO, logger=AsyncRt.__module__):
+    with caplog.at_level(logging.INFO, logger=rest2_async.__name__):
         await _mock_client(lambda request: httpx2.Response(200, json={'id': 1})).tickets.get(1)
 
     assert caplog.text == ''

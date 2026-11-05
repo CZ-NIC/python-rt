@@ -27,6 +27,12 @@ class AsyncGroups:
     """
 
     def __init__(self, transport: _AsyncTransport) -> None:
+        """Create the area of the API.
+
+        :py:class:`AsyncRt` creates it, do not create it yourself.
+
+        :param transport: Transport of the client, which sends the requests to RT.
+        """
         self._t = transport
 
     async def get(self, group_id: str | int, *, fields: dict[str, str] | None = None) -> dict[str, typing.Any]:

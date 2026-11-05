@@ -2,7 +2,7 @@ REST2
 ==============================
 
 .. automodule:: rt.rest2
-   :members:
+   :members: Rt
 
 The client has an attribute for each kind of object of RT, an instance of one of the following classes.
 

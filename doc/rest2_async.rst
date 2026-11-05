@@ -2,7 +2,7 @@ REST2 (async)
 ==============================
 
 .. automodule:: rt.rest2_async
-   :members:
+   :members: AsyncRt
 
 The client has an attribute for each kind of object of RT, an instance of one of the following classes.
 

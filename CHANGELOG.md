@@ -3,7 +3,7 @@ All notable changes to this project will be documented in this file.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v4.0.0], 2026-11-05
 ### Migration guide
 This release contains breaking changes. Most code only needs the adaptations below; the entries in the following
 sections describe all changes in detail.

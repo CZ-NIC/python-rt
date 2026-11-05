@@ -24,11 +24,11 @@ Python implementation of REST API described here:
    ">= 3.7", ">= 3.0.0, < 3.1.0"
    ">= 3.8", ">= 3.0.0, < 3.3.0"
    ">= 3.9", ">= 3.3.0, < 3.7.0"
-   ">= 3.10", ">= 3.7.0, <= 3.8.1"
-   ">= 3.11", "> 3.8.1"
+   ">= 3.10", ">= 3.7.0, <= 3.8.2"
+   ">= 3.11", ">= 4.0.0"
 
 ℹ️ **Note**:
-    Please note that starting with the next release after v3.8.1, this library requires Python version >= 3.11.
+    Please note that starting with v4.0.0, this library requires Python version >= 3.11.
     See the *Python version compatibility* table above for more detailed information.
 
 ⚡ **Note**:
